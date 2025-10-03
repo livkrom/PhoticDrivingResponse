@@ -5,6 +5,7 @@ import argparse
 from pathlib import Path
 import numpy as np
 import mne
+from mne.io.base import BaseRaw
 
 def parse_args()-> tuple[dict[str, str], argparse.Namespace]:
     """
@@ -63,7 +64,7 @@ def patient_files(trial_map: dict[str, str], args: argparse.Namespace) -> list[P
     data_folder = Path("/Volumes/Docs/Bruikbare Data") / trial_map[args.trial] / args.time
     return list(data_folder.glob("*.cnt"))
 
-def eeg(src, passband, notch = 50, plot: bool = False)-> mne.BaseRaw:
+def eeg(src, passband, notch = 50, plot: bool = False)-> BaseRaw:
     """
     Loads the EEG data.
 

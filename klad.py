@@ -1,5 +1,6 @@
 """
-Kladkladklad
+Kladkladklad 
+Deze module gebruik ik puur om functies te testen.
 """
 
 from pathlib import Path
@@ -48,4 +49,5 @@ passband = [0.5, 100]
 eeg = eeg(src, passband, notch = 50, plot=False)
 df = Power._stimulation(eeg, save=False)
 epochs, df_epochs = Power._epoch(df, eeg, save=False, plot=False)
-fft_powers, fft_freqs = Power._fft_blocks(passband, epochs, df_epochs, trim=0.0, padding= "copy", occi=False, plot=True)
+fft_powers, fft_freqs = Power._fft_blocks(passband, epochs, df_epochs, trim=0.0, padding= "copy", occi=False, plot=False)
+snr = Power._snr(passband, epochs, fft_powers, fft_freqs, save=True, plot=True, harms=4, montage="standard_1020")
