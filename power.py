@@ -28,10 +28,11 @@ class Power:
         """
         df_stim = self._stimulation(self.eeg)
         epochs, df_epochs = self._epoch(df_stim, self.eeg, plot=False)
-        fft_powers, fft_freq = self._fft_blocks(self.passband, epochs, df_epochs, padding = "zeros", plot=False)
-        snr = self._snr(self.passband, epochs, fft_powers, fft_freq, save=False, plot=False, harms=5)
+        fft_powers, fft_freq, epochs = self._fft_blocks(self.passband, epochs,
+                                        df_epochs, occi=True, padding = "zeros", plot=False)
+        powers = self._snr(self.passband, epochs, fft_powers, fft_freq, save=False, plot=False, harms=5)
 
-        return snr
+        return powers
 
     # -------------------------
     # Subfunctions
@@ -282,7 +283,7 @@ class Power:
                         ax.axvline(harmonic, color='gray', linestyle='dotted', linewidth=1)
             plt.tight_layout()
             plt.show()
-        return fft_powers, fft_freq
+        return fft_powers, fft_freq, ep
 
     @staticmethod
     def _snr(passband: list, epochs, fft_powers: dict, fft_freq: dict, save: bool = False, plot: bool = False,
@@ -304,7 +305,7 @@ class Power:
         :fft_freqs: list
             Contains the frequencies in Hz per bin. Should be 1 Hz per bin, truncated by the upper passband frequency. 
         :save: bool, optional
-            Option to save the made SNR dataframe.
+            Option to save the made SNR and baseline dataframe.
         :plot: bool, optional
             Option to plot a topomop of the different SNRs.
         :harms: int
@@ -314,13 +315,13 @@ class Power:
 
         Returns
         -------
-        :df_snr: Pandas DataFrame
-            Dataframe containing the SNRs for different frequencies/harmonics compared to baseline.
+        :df_all: Pandas DataFrame
+            Dataframe containing the SNRs and baseline powers for different frequencies/harmonics compared to baseline.
         """
 
         freqs = [f for f in fft_powers[1].keys() if f != 0]
         ch_names = epochs.info["ch_names"]
-        rows = []
+        rows_snr, rows_base = [], []
 
         for freq in freqs:
             harmonics = [freq * i for i in range(1, math.floor(passband[1]/freq)+1)]
@@ -328,20 +329,20 @@ class Power:
             for h in harmonics:
                 bin_idx = int(np.argmin(np.abs(np.array(fft_freq) - h)))
 
-                snr_channels = {}
-                for ch_name in ch_names:
-                    power_stim = fft_powers[0][freq][ch_name][bin_idx]
-                    power_base = fft_powers[0][0][ch_name][bin_idx]
-                    snr_channels[ch_name] = power_stim - power_base
-                snr_avg = np.mean(list(snr_channels.values()))
-                row = {"Frequency": freq, "Harmonic": h, "Average": snr_avg}
-                row.update(snr_channels)
-                rows.append(row)
+                powers_snr = {
+                    ch: fft_powers[0][freq][ch][bin_idx] - fft_powers[0][0][ch][bin_idx]
+                    for ch in ch_names}
+                powers_baseline = { ch: fft_powers[0][0][ch][bin_idx] for ch in ch_names }
 
-        df_snr = pd.DataFrame(rows)
+                rows_snr.append({"Frequency": freq, "Harmonic": h,
+                                 "Average": np.mean(list(powers_snr.values())), **powers_snr})
+                rows_base.append({"Frequency": freq, "Harmonic": h, **powers_baseline})
+
+        df_snr = pd.DataFrame(rows_snr)
+        df_all = df_snr.merge(pd.DataFrame(rows_base), on=["Frequency", "Harmonic"], suffixes=("_SNR", "_BASE"))
 
         if save:
-            df_snr.to_csv("snr.csv", float_format="%.3f", index=False)
+            df_all.to_csv("powers.csv", float_format="%.3f", index=False)
 
         if plot:
             fig, axes = plt.subplots(len(freqs), harms, figsize=((harms*6), len(freqs)*5))
@@ -357,16 +358,16 @@ class Power:
 
             for i, freq in enumerate(freqs):
                 for h in range(harms):
-                    snr_channels = df_snr[(df_snr["Frequency"] == freq)
+                    powers_snr = df_snr[(df_snr["Frequency"] == freq)
                                         & (df_snr["Harmonic"] == freq * (h+1))][ch_names].values.flatten()
-                    if snr_channels.shape[0] == 0:
+                    if powers_snr.shape[0] == 0:
                         axes[i, h].text(0.5, 0.5, 'No data', ha='center', va='center')
                         axes[i, h].set_xticks([])
                         axes[i, h].set_yticks([])
                         continue
                     axes[i, h].set_title(f"{freq} Hz, h={freq * (h+1)}")
-                    mne.viz.plot_topomap(snr_channels, pos_shifted, axes=axes[i, h], show=False, outlines="head",
-                                         sensors=True, vlim=(vmin, vmax), names=[f"{v:.1f}" for v in snr_channels])
+                    mne.viz.plot_topomap(powers_snr, pos_shifted, axes=axes[i, h], show=False, outlines="head",
+                                         sensors=True, vlim=(vmin, vmax), names=[f"{v:.1f}" for v in powers_snr])
                     for text in axes[i, h].texts:
                         text.set_fontsize(5)
 
@@ -376,4 +377,4 @@ class Power:
             fig.colorbar(sm, cax=cbar_ax, label='SNR (dB µV^2 / Hz)')
             plt.show()
 
-        return df_snr
+        return df_all

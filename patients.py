@@ -3,6 +3,8 @@ Module patients selects patientfiles, loads their EEG data and filters them.
 """
 import argparse
 from pathlib import Path
+from typing import List
+from collections import defaultdict
 import numpy as np
 import mne
 from mne.io.base import BaseRaw
@@ -36,14 +38,16 @@ def parse_args()-> tuple[dict[str, str], argparse.Namespace]:
         "t1": ["t0", "t1"],
         "t2": ["t0", "t1"]
     }
-    parser.add_argument("-t", "--time", choices = time_map.keys(), default="t1",
-                        help = "Choose point in time: t0, t1 or t2")
+    parser.add_argument("-t", "--time", choices = list(time_map.keys()), default="all",
+                        help = "Choose point in time: t0, t1, t2 or all")
 
     args = parser.parse_args()
-    if args.time not in time_map[args.trial]:
+    if args.time == "all":
+        args.time = time_map[args.trial]
+    elif args.time not in time_map[args.trial]:
         raise ValueError(f"Error: timepoint in {args.time} is not valid vor trial {args.trial}")
 
-    return trial_map, args
+    return trial_map, time_map, args
 
 def patient_files(trial_map: dict[str, str], args: argparse.Namespace) -> list[Path]:
     """
@@ -61,8 +65,15 @@ def patient_files(trial_map: dict[str, str], args: argparse.Namespace) -> list[P
     :list: list
         List containing all EEG files in format .cnt within the folder. 
     """
-    data_folder = Path("/Volumes/Docs/Bruikbare Data") / trial_map[args.trial] / args.time
-    return list(data_folder.glob("*.cnt"))
+    data_folder = Path("/Volumes/Docs/Bruikbare Data") / trial_map[args.trial]
+    timepoints = args.time if isinstance(args.time, list) else [args.time]
+
+    files = []
+    for tp in timepoints:
+        folder = data_folder / tp
+        files.extend(folder.glob("*.cnt"))  # collect all .cnt files
+
+    return files
 
 def eeg(src, passband, notch = 50, plot: bool = False)-> BaseRaw:
     """
@@ -95,3 +106,50 @@ def eeg(src, passband, notch = 50, plot: bool = False)-> BaseRaw:
         raw.plot(scalings = "auto", title="Filtered EEG data", show=True, block=True)
 
     return raw
+
+def filter_files(files: List[Path], time_map, args):
+    """
+    Keep only files for patients that have all required timepoints; 
+    moves incomplete sets to a trash folder.
+
+    Parameters
+    ----------
+    :files: List[Path]
+        List containing all Path objects for successfully processed files.
+    :trial_map: dict
+        Dictionary mapping trial arguments to folder names.
+    :args: argparse
+        Parsed command-line arguments, must contain `trial` and `time`.
+
+    Returns 
+    -------
+        List containing patients with files for all required timepoints.  
+    """
+    print("Finding complete patientdatasets...")
+    if args.time == "all":
+        args.time = time_map[args.trial]
+    timepoints = args.time if isinstance(args.time, list) else [args.time]
+
+    timepoint_mapping = {"1": "t0", "2": "t1", "3": "t2"}
+    patient_times = defaultdict(set)
+    for f in files:
+        file = f.stem
+        if "_" not in file:
+            print(f"Unexpected filename: {file}")
+            continue
+        patient_id, rest = file.split("_", 1)
+        num = rest.split("_")[0]
+        timepoint = timepoint_mapping.get(num)
+        if timepoint:
+            patient_times[patient_id].add(timepoint)
+
+    complete = {pid for pid, tps in patient_times.items() if set(timepoints).issubset(tps)}
+    files_complete = [f for f in files if f.stem.split("_", 1)[0] in complete]
+
+    to_remove = set(files) - set(files_complete)
+    trash_folder = Path("./incomplete_files")
+    trash_folder.mkdir(parents=True, exist_ok=True)
+    for f in to_remove:
+        f.rename(trash_folder / f.name)
+
+    return complete
