@@ -30,7 +30,6 @@ def stats_base(power_path: Path, paired: bool = True, save: bool = True):
     files = list(power_path.glob("*_power.pkl"))
     baselines = {}
     timepoints = set()
-    patients = set()
 
     # Averaging over baselines
     for file in files:
@@ -80,21 +79,22 @@ def stats_base(power_path: Path, paired: bool = True, save: bool = True):
 
         # Choosing and performing statistical test
         test, stat, p = None, None, None
+        n = len(timepoints)
         if paired:
-            if len(timepoints) == 2:
+            if n == 2:
                 stat, p = wilcoxon(*values_per_tp)
                 test = "Wilcoxon signed-rank"
-            elif len(timepoints) > 2:
+            elif n > 2:
                 stat, p = friedmanchisquare(*values_per_tp)
                 test = "Friedman chi-squared"
             else:
                 print(f"Can't compare only one baseline, error in {tp}.")
                 continue
         else:
-            if len(timepoints) == 2:
+            if n == 2:
                 stat, p = mannwhitneyu(*values_per_tp)
                 test = "Mann-Whitney U"
-            elif len(timepoints) > 2:
+            elif n > 2:
                 stat, p = kruskal(*values_per_tp)
                 test = "Kruskal Wallis"
             else:
@@ -106,12 +106,12 @@ def stats_base(power_path: Path, paired: bool = True, save: bool = True):
                 "Test": test,
                 "paired": paired,
                 "statistic": stat,
-                "Critical chi-squared": chi2.isf(q=0.05, df=len(timepoints)-1) if len(timepoints) > 2 else "Non-applicable",
+                "Critical chi-squared": chi2.isf(q=0.05, df=n-1) if n > 2 else "Non-applicable",
                 "p_value": p})
 
     df_results = pd.DataFrame(results)
-    
-    # Optie om de dataframe op te slaan. 
+
+    # Optie om de dataframe op te slaan.
     if save:
         df_results.to_csv("base_stats.csv", sep=";", index=False)
         print("Baseline statistics dataframe saved as base_stats.csv")

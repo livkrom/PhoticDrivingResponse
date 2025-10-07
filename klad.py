@@ -18,7 +18,7 @@ from analytics import stats_base
 #     "t0": "T0_T1_T2",
 #     "t1": "T0_T1",
 #     "t2": "T0_T1"}
-# parser.add_argument("-tr", "--trial", choices = trial_map.keys(), default="t0", 
+# parser.add_argument("-tr", "--trial", choices = trial_map.keys(), default="t0",
 # help = "Choose trial map: t0, t1 or t2")
 
 # time_map = {
@@ -53,7 +53,7 @@ from analytics import stats_base
 # epochs, df_epochs = Power._epoch(df, eeg, save=False, plot=False)
 # fft_powers, fft_freqs, epochs = Power._fft_blocks(passband, epochs, df_epochs, t
 # rim=0.0, padding= "copy", occi=True, plot=False)
-# powers = Power._snr(passband, epochs, fft_powers, fft_freqs, save=True, plot=True, 
+# powers = Power._snr(passband, epochs, fft_powers, fft_freqs, save=True, plot=True,
 # harms=4, montage="standard_1020")
 
 ## Filtering files function
@@ -66,6 +66,7 @@ time_map = {
     "t2": ["t0", "t1"]
 }
 class Args:
+    """Beepboop"""
     time = "all"
     trial = "t0"
 args = Args()
