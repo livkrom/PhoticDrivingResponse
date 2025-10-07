@@ -4,20 +4,22 @@ Deze module gebruik ik puur om functies te testen.
 """
 
 from pathlib import Path
-import argparse
+#import argparse
 
-import matplotlib
-matplotlib.use("TkAgg")
+#import matplotlib
+#matplotlib.use("TkAgg")
 
-from patients import parse_args, patient_files, eeg, filter_files
-from power import Power
+#from patients import parse_args, patient_files, eeg, filter_files
+#from power import Power
+from analytics import stats_base
 
 # parser = argparse.ArgumentParser()
 # trial_map = {
 #     "t0": "T0_T1_T2",
 #     "t1": "T0_T1",
 #     "t2": "T0_T1"}
-# parser.add_argument("-tr", "--trial", choices = trial_map.keys(), default="t0", help = "Choose trial map: t0, t1 or t2")
+# parser.add_argument("-tr", "--trial", choices = trial_map.keys(), default="t0", 
+# help = "Choose trial map: t0, t1 or t2")
 
 # time_map = {
 #     "t0": ["t0", "t1", "t2"],
@@ -49,8 +51,10 @@ from power import Power
 # eeg = eeg(src, passband, notch = 50, plot=False)
 # df = Power._stimulation(eeg, save=False)
 # epochs, df_epochs = Power._epoch(df, eeg, save=False, plot=False)
-# fft_powers, fft_freqs, epochs = Power._fft_blocks(passband, epochs, df_epochs, trim=0.0, padding= "copy", occi=True, plot=False)
-# powers = Power._snr(passband, epochs, fft_powers, fft_freqs, save=True, plot=True, harms=4, montage="standard_1020")
+# fft_powers, fft_freqs, epochs = Power._fft_blocks(passband, epochs, df_epochs, t
+# rim=0.0, padding= "copy", occi=True, plot=False)
+# powers = Power._snr(passband, epochs, fft_powers, fft_freqs, save=True, plot=True, 
+# harms=4, montage="standard_1020")
 
 ## Filtering files function
 
@@ -67,6 +71,10 @@ class Args:
 args = Args()
 
 
-# === FILTER FILES ===
-complete = filter_files(list(Path("./results_POWER").glob("*_power.pkl")), time_map, args)
-print(f"Complete sets of files for: {complete}")
+# # === FILTER FILES ===
+# complete = filter_files(list(Path("./results_POWER").glob("*_power.pkl")), time_map, args)
+# print(f"Complete sets of files for: {complete}")
+
+# === Analytics ===
+power_path = Path("./results_POWER")
+stats_base(power_path, paired=True, save=True)

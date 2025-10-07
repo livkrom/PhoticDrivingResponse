@@ -1,14 +1,15 @@
 """
 Analytics
 """
-from pathlib import Path
-from scipy.stats import friedmanchisquare
 import re
-import matplotlib.pyplot as plt
+from pathlib import Path
+from scipy.stats import wilcoxon, friedmanchisquare, mannwhitneyu, kruskal, chi2
+#import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
 
 
-def stats_base(power_path: Path, time_map, args, paired: bool = True):
+def stats_base(power_path: Path, paired: bool = True, save: bool = True):
     """
     Checks if there is a difference in baseline frequencies.
     In this code we average over all given baseline channels. 
@@ -23,9 +24,13 @@ def stats_base(power_path: Path, time_map, args, paired: bool = True):
         Parsed command-line arguments, must contain `trial` and `time`.
     :paired: bool
         For now we are testing on paired data, but this will not always be the case. 
+    :save: bool
+        Option to save the made baseline statistics dataframe. 
     """
     files = list(power_path.glob("*_power.pkl"))
     baselines = {}
+    timepoints = set()
+    patients = set()
 
     # Averaging over baselines
     for file in files:
@@ -35,6 +40,7 @@ def stats_base(power_path: Path, time_map, args, paired: bool = True):
             continue
         patient, timepoint = match.groups()
         patient, timepoint = int(patient), int(timepoint)
+        timepoints.add(timepoint)
 
         df = pd.read_pickle(file)
         channels = [c for c in df.columns if c.endswith("_BASE")]
@@ -45,19 +51,15 @@ def stats_base(power_path: Path, time_map, args, paired: bool = True):
             baselines[patient] = {}
         baselines[patient][timepoint] = df
 
-    if args.time == "all":
-        args.time = time_map[args.trial]
-    timepoints = args.time if isinstance(args.time, list) else [args.time]
-    
     # Defining stimulation & harmonic pairs
     freqs = set()
     for p_data in baselines.values():
         for tp, df in p_data.items():
-            pairs = list(zip(df["Frequency"], ["Harmonic"]))
+            pairs = list(zip(df["Frequency"], df["Harmonic"]))
             freqs.update(pairs)
     freqs = sorted(freqs)
 
-    # Gathering data per frequency pair
+    # Remapping data to frequency pairs
     results = []
     for freq, harm in freqs:
         values_per_tp = []
@@ -69,19 +71,50 @@ def stats_base(power_path: Path, time_map, args, paired: bool = True):
                     sel = df[(df["Frequency"] == freq) & (df["Harmonic"] == harm)]
                     if not sel.empty:
                         values.append(sel["Baseline_avg"].values[0])
+                    else:
+                        print(f"No baseline value for frequency-pair {sel} for patient {patient}.")
+                else:
+                    print(f"Timepoint {tp} not found for patient {patient}.")
+                    continue
             values_per_tp.append(np.array(values))
-        
-        k = len(timepoints)
 
-    if paired:
-        if k == 2:
-            # wilcoxon signed rank test
-        elif k > 2:
-            #frieman chi squared test
-        else: 
-            raise ValueError ("Not enough baselines to compare.")
-    else:
-        #mann whitney u test 2 maps
+        # Choosing and performing statistical test
+        test, stat, p = None, None, None
+        if paired:
+            if len(timepoints) == 2:
+                stat, p = wilcoxon(*values_per_tp)
+                test = "Wilcoxon signed-rank"
+            elif len(timepoints) > 2:
+                stat, p = friedmanchisquare(*values_per_tp)
+                test = "Friedman chi-squared"
+            else:
+                print(f"Can't compare only one baseline, error in {tp}.")
+                continue
+        else:
+            if len(timepoints) == 2:
+                stat, p = mannwhitneyu(*values_per_tp)
+                test = "Mann-Whitney U"
+            elif len(timepoints) > 2:
+                stat, p = kruskal(*values_per_tp)
+                test = "Kruskal Wallis"
+            else:
+                print(f"Can't compare only one baseline, error in {tp}.")
+                continue
+
+        results.append({"Frequency": freq,
+                "Harmonic": harm,
+                "Test": test,
+                "paired": paired,
+                "statistic": stat,
+                "Critical chi-squared": chi2.isf(q=0.05, df=len(timepoints)-1) if len(timepoints) > 2 else "Non-applicable",
+                "p_value": p})
+
+    df_results = pd.DataFrame(results)
     
-def stats_power():
-    
+    # Optie om de dataframe op te slaan. 
+    if save:
+        df_results.to_csv("base_stats.csv", sep=";", index=False)
+        print("Baseline statistics dataframe saved as base_stats.csv")
+
+    return df_results
+#def stats_power():
