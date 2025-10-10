@@ -18,10 +18,6 @@ def stats_base(power_path: Path, paired: bool = True, save: bool = True):
     ----------
     :files: List[Path]
         List containing all Path objects for successfully processed files.
-    :trial_map: dict
-        Dictionary mapping trial arguments to folder names.
-    :args: argparse
-        Parsed command-line arguments, must contain `trial` and `time`.
     :paired: bool
         For now we are testing on paired data, but this will not always be the case. 
     :save: bool
@@ -117,4 +113,20 @@ def stats_base(power_path: Path, paired: bool = True, save: bool = True):
         print("Baseline statistics dataframe saved as base_stats.csv")
 
     return df_results
-#def stats_power():
+
+def stats_power(power_path: Path, paired: bool = True, save: bool = True, abs: bool = True):
+    """
+    This code checks if there is a statistical difference between the different timepoints.
+
+    Parameters
+    ----------
+    :files: List[Path]
+        List containing all Path objects for successfully processed files.
+    :paired: bool
+        For now we are testing on paired data, but this will not always be the case. 
+    :save: bool
+        Option to save the made baseline statistics dataframe.
+    :abs: bool
+        Option to either use absolute or relative values. 
+    """
+    

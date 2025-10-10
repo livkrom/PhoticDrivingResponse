@@ -1,6 +1,5 @@
 """
-Module power calculates the power spectral densities of the different flash-stimuli blocks and 
-calculates the SNR (flash-stimulation-harmonics vs baseline).
+Module coherency calculates the time-locked coherency of the different flash-stimuli blocks and.
 """
 import math
 from dataclasses import dataclass
@@ -16,82 +15,9 @@ matplotlib.use("TkAgg")
 
 @dataclass
 class Power:
-    """ Implements the full power calculation pipeline for EEG data. """
-    passband: list
-    eeg: BaseRaw
-
-    def run(self):
+    def _find_epoch_power(df: pd.DataFrame, raw: BaseRaw, save: bool = False)-> tuple[list, pd.DataFrame]:
         """
-        Run the full pipeline on EEg data and return the SNR DataFrame.
-        
-        :EEG: filtered EEG data, should contain trigger timing in annotations.
-        """
-        df_stim = self._stimulation_power(self.eeg)
-        epochs, df_epochs = self._epoch_power(df_stim, self.eeg, plot=False)
-        fft_powers, fft_freq, epochs = self._fft_power(self.passband, epochs,
-                                        df_epochs, occi=True, padding = "zeros", plot=False)
-        powers = self._snr(self.passband, epochs, fft_powers, fft_freq, save=False, plot=False, harms=5)
-
-        return powers
-
-    # -------------------------
-    # Subfunctions
-    # -------------------------
-
-    @staticmethod
-    def _stimulation_power(raw:BaseRaw, save: bool = False) -> pd.DataFrame:
-        """
-        Extracts the stimulation blocks from trigger-annotations of EEG Data.
-
-        Parameters
-        ----------        
-        :raw: mne.BaseRaw
-            EEG data, should contain trigger timing in annotations.
-        :save: bool, optional
-            Option to save the made dataframe.
-
-        Returns
-        -------
-        :df: Pandas DataFrame
-            Dataframe containing EEG data information.
-        """
-        sfreq = raw.info["sfreq"]
-        block_threshold = 1.0 * sfreq
-
-        sample, _ = mne.events_from_annotations(raw)
-        df = pd.DataFrame(sample, columns=["sample", "previous", "event_id"])
-        df["block"] = (np.diff(np.r_[0, df["sample"].to_numpy()]) > block_threshold).cumsum()
-
-        def compute_freq(samples):
-            return int(round(1/np.mean(np.diff(samples)/sfreq),2)) if len(samples) > 1 else np.nan
-
-        df["freq"] = df.groupby("block")["sample"].transform(compute_freq)
-
-        rep, rep_freqs = 1, set()
-        for block_id, freq in df.groupby("block")["freq"].first().items():
-            if pd.isna(freq):
-                continue
-            if freq in rep_freqs:
-                rep += 1
-                rep_freqs = {freq}
-            else:
-                rep_freqs.add(freq)
-            df.loc[df["block"] == block_id, "block base"] = int(rep + block_id)
-            df.loc[df["block"] == block_id, "rep"] = int(rep)
-
-        df.drop(["block", "event_id"], axis=1, inplace=True)
-        # Option to save the dataframe
-        if save:
-            df.to_csv("power_stimulation_info.csv", index=False)
-            print("Stimulation dataframe saved as power_stimulation_info.csv")
-
-        return df
-
-    @staticmethod
-    def _epoch_power(df: pd.DataFrame, raw: BaseRaw, save: bool = False, plot: bool = False
-               )-> tuple[mne.Epochs, pd.DataFrame]:
-        """
-        Adds baseline blocks with no stimulation and epochs the raw EEG data around all blocks. 
+        Adds baseline blocks with no stimulation and find epochs of the raw EEG data around all blocks. 
 
         Parameters
         ----------
@@ -106,15 +32,16 @@ class Power:
 
         Returns
         -------
-        :epochs: mne.Epochs
-            EEG data epoched around the different frequencies.
+        :ends: list
+            List with min and max value for epochs.
         :df_epochs:
             Dataframe containing information about the epochs.
         """
         sfreq = raw.info["sfreq"]
         df_epochs = df.loc[df.groupby("block base")["sample"].idxmin()].reset_index(drop=True)
         df_epochs["ends"] = df.groupby("block base")["sample"].max().values
-        tmax = int(math.ceil(((df_epochs["ends"] - df_epochs["sample"]) / sfreq).min()))
+        tmax = int(math.ceil(((df_epochs["ends"] - df_epochs["sample"]) / sfreq).max()))
+        ends = [0, ends]
 
         blocks_baseline = []
         for rep, rep_epochs in df_epochs.groupby("rep"):
@@ -131,29 +58,14 @@ class Power:
 
         df_epochs = pd.concat([df_epochs, pd.DataFrame(blocks_baseline)], ignore_index=True)
         df_epochs = df_epochs.sort_values(by="sample").reset_index(drop=True)
-
-        # Option to save DataFrame as .csv file
         if save:
-            df_epochs.to_csv("power_epochs.csv", float_format="%.3f", index=False)
-            print("Epoch dataframe saved as power_epochs.csv")
-
-        threshold = 1e-6
-        channels_dropped = ['EOG'] + [ch for ch in raw.ch_names if np.all(np.abs(raw.get_data(picks=ch)) < threshold)]
-        raw.drop_channels(channels_dropped)
-        print(f"Dropped channels: {channels_dropped}")
+            df_epochs.to_csv("epochs.csv", float_format="%.3f", index=False)
+            print("Epoch dataframe saved as epochs.csv")
 
         np_epochs = df_epochs[["sample", "previous", "freq"]].to_numpy(dtype=int)
-        epochs = mne.Epochs(raw, np_epochs, event_id=None, tmin=0, tmax=tmax,
-                            baseline=None, preload=True, verbose='ERROR') # pylint: disable=not-callable
+        return ends, np_epochs
 
-        # Option to plot Epochs
-        if plot:
-            epochs.plot(block=True)
-
-        return epochs, df_epochs
-
-    @staticmethod
-    def _fft_power(passband: list, epochs, df_epochs: pd.DataFrame, trim: float = 0.0, padding: str = "copy",
+    def _fft_blocks(passband: list, epochs, df_epochs: pd.DataFrame, trim: float = 0.0, padding: str = "copy",
                     occi: bool = False, plot: bool = False)-> tuple[dict, dict]:
         """
         Automatically compute FFT for all blocks.
@@ -378,3 +290,142 @@ class Power:
             plt.show()
 
         return df_all
+
+@dataclass
+class Coherency:
+    def _find_epoch_coherency(df: pd.DataFrame, raw: BaseRaw, save: bool = False)-> tuple[pd.Dataframe, pd.DataFrame]:
+        """
+        Find epochs of the raw EEG data for different stimulation frequencies. 
+
+        Parameters
+        ----------
+        :df: Pandas DataFrame
+            Dataframe containing information about the stimulation blocks.
+        :raw: mne.BaseRaw
+            EEG data, should contain trigger timing in annotations.
+        :save: bool, optional
+            Option to save the made dataframe.
+
+        Returns
+        -------
+        :ends: Pandas DataFrame
+            Dataframe with min and max values per frequency for epochs.
+        :df_epochs:
+            Dataframe containing information about the epochs.
+        """
+        sfreq = raw.info["sfreq"]
+        df_epochs = df.loc[df.groupby("block base")["sample"].idxmin()].reset_index(drop=True)
+
+        df_epochs = df_epochs.sort_values(by="sample").reset_index(drop=True)
+        if save:
+            df_epochs.to_csv("epochs.csv", float_format="%.3f", index=False)
+            print("Epoch dataframe saved as epochs.csv")
+
+        np_epochs = df_epochs[["sample", "previous", "freq"]].to_numpy(dtype=int)
+        return np_epochs
+
+@dataclass
+class PSD:
+    """ Implements the full power calculation pipeline for EEG data. """
+    passband: list
+    eeg: BaseRaw
+
+    def __int__(self):
+        """
+        Run the full pipeline on EEG data and return ... .
+        
+        :EEG: filtered EEG data, should contain trigger timing in annotations.
+        """
+
+    @staticmethod
+    def _stimulation(raw:BaseRaw, save = False) -> pd.DataFrame:
+        """
+        Extracts the stimulation blocks from trigger-annotations of EEG Data.
+
+        Parameters
+        ----------        
+        :raw: mne.BaseRaw
+            EEG data, should contain trigger timing in annotations.
+        :save: bool, optional
+            Option to save the made dataframe.
+
+        Returns
+        -------
+        :df: Pandas DataFrame
+            Dataframe containing EEG data information.
+        """
+        sfreq = raw.info["sfreq"]
+        block_threshold = 1.0 * sfreq
+
+        sample, _ = mne.events_from_annotations(raw)
+        df = pd.DataFrame(sample, columns=["sample", "previous", "event_id"])
+        df["block"] = (np.diff(np.r_[0, df["sample"].to_numpy()]) > block_threshold).cumsum()
+
+        def compute_freq(samples):
+            return int(round(1/np.mean(np.diff(samples)/sfreq),2)) if len(samples) > 1 else np.nan
+
+        df["freq"] = df.groupby("block")["sample"].transform(compute_freq)
+
+        rep, rep_freqs = 1, set()
+        for block_id, freq in df.groupby("block")["freq"].first().items():
+            if pd.isna(freq):
+                continue
+            if freq in rep_freqs:
+                rep += 1
+                rep_freqs = {freq}
+            else:
+                rep_freqs.add(freq)
+            df.loc[df["block"] == block_id, "block base"] = int(rep + block_id)
+            df.loc[df["block"] == block_id, "rep"] = int(rep)
+
+        df.drop(["block", "event_id"], axis=1, inplace=True)
+        # Option to save the dataframe
+        if save:
+            df.to_csv("stimulation_info.csv", index=False)
+            print("Stimulation dataframe saved as stimulation_info.csv")
+
+        return df
+
+    @staticmethod
+    def _epoch(self, raw: BaseRaw, np_epochs, mode='power', plot: bool=False):
+        """Drops bad channels and epochs the raw EEGdata based on np_epochs."""
+
+        # Drop bad channels
+        threshold = 1e-6
+        channels_dropped = ['EOG'] + [ch for ch in raw.ch_names if np.all(np.abs(raw.get_data(picks=ch)) < threshold)]
+        raw.drop_channels(channels_dropped)
+        print(f"Dropped channels: {channels_dropped}")
+        
+        # Making the epochs
+        if mode == 'power':
+            
+            epochs = mne.Epochs(raw, np_epochs, event_id=None, tmin=0, tmax=tmax,
+                            baseline=None, preload=True, verbose='ERROR')
+        elif mode == 'coherency':
+            epoch_params = self.coherency.find_epochs_coherency(np_epochs)
+        
+
+        # Option to plot Epochs
+        if plot:
+            epochs.plot(block=True)
+
+        return epochs
+    
+    @staticmethod
+    def _results(self, mode='both'):
+        """Run alle analyses in één keer."""
+        stim_df = self.stimulation()
+
+        results = {}
+        if mode in ('power', 'both'):
+            ep_pwr = self.epoch(stim_df, mode='power')
+            ep_pwr = self.power.add_baseline(ep_pwr)
+            fft_pwr = self.power.fft_power(ep_pwr)
+            results['power'] = self.power.compute_snr(fft_pwr)
+        
+        if mode in ('coherency', 'both'):
+            ep_coh = self.epoch(stim_df, mode='coherency')
+            fft_coh = self.coherency.fft_coherency(ep_coh)
+            results['coherency'] = self.coherency.compute_coherency(fft_coh)
+        
+        return results
