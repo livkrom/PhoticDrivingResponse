@@ -206,7 +206,7 @@ class Power:
         reps =int((df_epochs["rep"]).max())
         freqs = sorted(df_epochs["freq"].dropna().astype(int).unique())
 
-        # FFT (Hanning window & Welch)
+        # FFT preparation (Hanning window & Welch)
         fft_powers = {rep: {f: {ch: [] for ch in ch_names} for f in freqs} for rep in range(0, reps + 1)}
         overlap = 0.5
         window_length = int(sfreq)
