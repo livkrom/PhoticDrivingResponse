@@ -16,7 +16,7 @@ from mne.io.base import BaseRaw
 
 from patients import parse_args, patient_files, eeg, filter_files
 # from power import Power
-# from coherency import Coherency
+from phase import Phase
 #from analytics import stats_base
 
 parser = argparse.ArgumentParser()
@@ -53,16 +53,16 @@ pt = "VEP38_" + data_map[args.time] + ".cnt"
 src = Path('/Volumes/Docs/Bruikbare Data') / trial_map[args.trial] / args.time / pt
 passband = [0.5, 100]
 
-# Comparing EEG without max filter
-eeg = eeg(src, passband, notch = 50, plot=True)
-raw = mne.io.read_raw_ant(src, preload=True, verbose='ERROR')
-raw.filter(l_freq=0.05, h_freq=1999, picks="eeg", verbose='ERROR')
-line_freq = 50 if (freq := raw.info["line_freq"]) is None else freq
-lowpass = np.arange(line_freq, raw.info["lowpass"]+1, line_freq)
-raw.notch_filter(freqs=(lowpass), notch_widths=(lowpass)/line_freq, picks=["eeg"], verbose='ERROR')
-raw.plot(scalings = "auto", title="Non-Filtered EEG data", show=True, block=False)
+# # Comparing EEG without max filter
+# eeg = eeg(src, passband, notch = 50, plot=True)
+# raw = mne.io.read_raw_ant(src, preload=True, verbose='ERROR')
+# raw.filter(l_freq=0.05, h_freq=1999, picks="eeg", verbose='ERROR')
+# line_freq = 50 if (freq := raw.info["line_freq"]) is None else freq
+# lowpass = np.arange(line_freq, raw.info["lowpass"]+1, line_freq)
+# raw.notch_filter(freqs=(lowpass), notch_widths=(lowpass)/line_freq, picks=["eeg"], verbose='ERROR')
+# raw.plot(scalings = "auto", title="Non-Filtered EEG data", show=True, block=False)
 
-plt.show(block=True)
+# plt.show(block=True)
 # Testing power functions
 # eeg = eeg(src, passband, notch = 50, plot=True)
 # df = Power._stimulation_power(eeg, save=False)
@@ -72,12 +72,11 @@ plt.show(block=True)
 # powers = Power._snr(passband, epochs, fft_powers, fft_freqs, save=True, plot=True,
 # harms=4, montage="standard_1020")
 
-# # Testing coherency functions
-# raw = eeg(src, passband, notch = 50, plot=False)
-# df = Coherency._stimulation_coherency(raw, save=False)
-# filtered_epochs, freqs = Coherency._epoch_coherency(df, raw, upper_lim = 40)
-# print(f"Freqs: {freqs}")
-# print(f"Filtered epochs: {filtered_epochs}")
+# Testing phase functions
+raw = eeg(src, passband, notch = 50, plot=False)
+df = Phase._stimulation_phase(raw, save=False)
+filtered_epochs =  Phase._epoch_phase(df, raw)
+phases = Phase._fft_phase(filtered_epochs, occi=True, plot = False, save=True)
 
 ## Filtering files function
 
