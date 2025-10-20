@@ -104,13 +104,12 @@ class Phase:
                             "freq": int(f),
                             "rep": int(rep),
                         })
+            df_base = pd.DataFrame(baseline_blocks)
 
         # Option to save the dataframe
         if save:
             df.to_csv("phase_stimulation_info.csv", index=False)
-            
             if base:
-                df_base = pd.DataFrame(baseline_blocks)
                 df_base.to_csv("baseline_info.csv", index=False)
                 print("Stimulation dataframes saved as phase_stimulation_info.csv and baseline_info.csv")
             else:

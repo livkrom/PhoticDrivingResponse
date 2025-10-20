@@ -75,7 +75,7 @@ def patient_files(trial_map: dict[str, str], args: argparse.Namespace) -> list[P
 
     return files
 
-def eeg(src, passband, notch = 50, plot: bool = False)-> BaseRaw:
+def eeg(src, passband, notch = 50, occi: bool = False, plot: bool = False)-> BaseRaw:
     """
     Loads the EEG data.
 
@@ -87,6 +87,8 @@ def eeg(src, passband, notch = 50, plot: bool = False)-> BaseRaw:
         List containing the lower and upper frequency boundary of the passband filter.
     :notch: float
         Line frequency during the measurement to notch-filter for.
+    :occi: bool, optional
+            Option to choose either all channels or only the occipital ones.
     :plot: bool, optional
         Option to plot the filtered raw EEG data with basic line- and passbandfiltering.
 
@@ -101,6 +103,14 @@ def eeg(src, passband, notch = 50, plot: bool = False)-> BaseRaw:
     line_freq = notch if (freq := raw.info["line_freq"]) is None else freq
     lowpass = np.arange(line_freq, raw.info["lowpass"]+1, line_freq)
     raw.notch_filter(freqs=(lowpass), notch_widths=(lowpass)/line_freq, picks=["eeg"], verbose='ERROR')
+
+    if occi:
+        raw = raw.copy().pick(["O1", "O2", "Oz"])
+    else:
+        threshold = 1e-6
+        channels_dropped = set(['EOG'] + [ch for ch in raw.ch_names if np.all(np.abs(raw.get_data(picks=ch)) < threshold)])
+        raw.drop_channels([ch for ch in channels_dropped if ch in raw.ch_names])
+        print(f"Dropped channels: {channels_dropped}")
 
     if plot:
         raw.plot(scalings = "auto", title="Filtered EEG data", show=True, block=True)

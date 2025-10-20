@@ -18,7 +18,7 @@ if __name__ == "__main__":
     all_mean_plv = {}
     for pt_file in pt_files:
         print(f"Processing {pt_file.name}...")
-        raw = eeg(pt_file, passband)
+        raw = eeg(pt_file, passband, occi=True, plot=False)
 
         # # Power calculation
         # try: 
@@ -38,6 +38,9 @@ if __name__ == "__main__":
         try:
             phase_path = Path("./results_PLV")
             phases = Phase(passband, raw).run()
+            # df, df_base = Phase._stimulation_phase(raw, save=False, base=True)
+            # epochs_baseline =  Phase._epoch_phase(df_base, raw)
+            # phases = Phase._fft_phase(epochs_baseline, occi=True, plot=False, save=False)
             patient_plv = {k: v["mean_plv"] for k, v in phases.items()}
             all_mean_plv[pt_file.stem] = pd.Series(patient_plv)
         except Exception as e:
@@ -45,7 +48,8 @@ if __name__ == "__main__":
             skipped.append((pt_file.name, "Phase", str(e)))
             continue
 
-    all_mean_plv.to_csv('PLV.csv', index=False)
+    df_plv = pd.DataFrame(all_mean_plv)
+    df_plv.to_csv('PLV.csv', index=True)
     print(f"Saved PLV to {phase_path}")
 
     print("Folder analysis completed.")
