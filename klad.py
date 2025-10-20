@@ -74,9 +74,14 @@ passband = [0.5, 100]
 
 # Testing phase functions
 raw = eeg(src, passband, notch = 50, plot=False)
-df = Phase._stimulation_phase(raw, save=False)
-filtered_epochs =  Phase._epoch_phase(df, raw)
-phases = Phase._fft_phase(filtered_epochs, occi=True, plot = False, save=True)
+df, baseline_blocks = Phase._stimulation_phase(raw, save=True, base = True)
+# epochs =  Phase._epoch_phase(df, raw)
+# phases = Phase._fft_phase(epochs, occi=True, plot = True, save=False)
+
+# Baseline phase functions
+epochs_baseline =  Phase._epoch_phase(baseline_blocks, raw)
+phases_baseline = Phase._fft_phase(epochs_baseline, occi=True, plot = True, save=False)
+
 
 ## Filtering files function
 

@@ -1,5 +1,5 @@
 """
-Module power evaluates the phase-locking of the stimulation frequencies. 
+Module phase evaluates the phase-locking of the stimulation frequencies. 
 """
 import math
 from dataclasses import dataclass
@@ -32,7 +32,7 @@ class Phase:
         return phases
 
     @staticmethod
-    def _stimulation_phase(raw:BaseRaw, save: bool = False) -> pd.DataFrame:
+    def _stimulation_phase(raw:BaseRaw, save: bool = False, base: bool = False) -> pd.DataFrame:
         """
         Extracts the stimulation blocks from trigger-annotations of EEG Data.
 
@@ -42,6 +42,8 @@ class Phase:
             EEG data, should contain trigger timing in annotations.
         :save: bool, optional
             Option to save the made dataframe.
+        :base: bool, optional
+            Option to create baseline blocks.
 
         Returns
         -------
@@ -71,17 +73,49 @@ class Phase:
                 rep_freqs.add(freq)
             df.loc[df["block"] == block_id, "rep"] = int(rep)
         df.drop(["event_id"], axis=1, inplace=True)
+        
+        # Option to create baseline blocks
+        if base:
+            baseline_blocks = []
+            df_epochs = df.loc[df.groupby("block")["sample"].idxmin()].reset_index(drop=True)
+            df_epochs["ends"] = df.groupby("block")["sample"].max().values
+            tmax = int(math.ceil(((df_epochs["ends"] - df_epochs["sample"]) / sfreq).min()))
+            
+            for rep, rep_epochs in df.groupby("rep"):
+                for f in rep_epochs["freq"].unique():
+                    if np.isnan(f):
+                        continue
+                    start = rep_epochs["sample"].min() - 0.1*sfreq - tmax*sfreq
+                    period_samples = sfreq / freq
+                    baseline_samples = np.arange(start, start + (tmax * sfreq), period_samples)
+
+                    for sample in baseline_samples:
+                        baseline_blocks.append({
+                            "sample": int(sample + rep), # unieke offsets nodig MNE
+                            "previous": int(0),
+                            "freq": int(f),
+                            "rep": int(rep),
+                        })
 
         # Option to save the dataframe
         if save:
             df.to_csv("phase_stimulation_info.csv", index=False)
-            print("Stimulation dataframe saved as phase_stimulation_info.csv")
+            
+            if base:
+                df_base = pd.DataFrame(baseline_blocks)
+                df_base.to_csv("baseline_info.csv", index=False)
+                print("Stimulation dataframes saved as phase_stimulation_info.csv and baseline_info.csv")
+            else:
+                print("Stimulation dataframe saved as phase_stimulation_info.csv")
 
-        return df
+        if base:
+            return df, df_base
+        else:
+            return df
 
     @staticmethod
-    def _epoch_phase(df: pd.DataFrame, raw: BaseRaw, upper_lim: int = int(40),
-                         )-> tuple[dict[tuple[int, int], mne.Epochs], pd.DataFrame]:
+    def _epoch_phase(df: pd.DataFrame, raw: BaseRaw, upper_lim: int = int(40)
+                        )-> tuple[dict[tuple[int, int], mne.Epochs], pd.DataFrame]:
         """
         Find epochs of the raw EEG data for different stimulation frequencies. 
 
@@ -95,6 +129,8 @@ class Phase:
             Maximum frequency that we are interested in, default is in the lower end of the gamma-band.
         :save: bool, optional
             Option to save the made dataframe.
+        :baseline_blocks: ..., optional
+            ...
 
         Returns
         -------
@@ -105,7 +141,7 @@ class Phase:
         """
         threshold = 1e-6
         channels_dropped = ['EOG'] + [ch for ch in raw.ch_names if np.all(np.abs(raw.get_data(picks=ch)) < threshold)]
-        raw.drop_channels(channels_dropped)
+        raw.drop_channels([ch for ch in channels_dropped if ch in raw.ch_names])
         print(f"Dropped channels: {channels_dropped}")
 
         freqs_stim = df["freq"].unique()
@@ -123,7 +159,7 @@ class Phase:
                 h_freq = h + bandwidth
 
                 raw_copy = raw.copy()
-                raw_filt = raw_copy.filter(l_freq=l_freq, h_freq=h_freq, picks="eeg", verbose="ERROR")
+                raw_filt = raw_copy.filter(l_freq=l_freq, h_freq=h_freq, picks="eeg", phase='zero', verbose="ERROR")
 
                 tmax = (cycles/h)+tmin
                 epochs = mne.Epochs(raw_filt, np_epochs, event_id={str(f):f}, tmin=tmin, tmax=tmax,
@@ -131,7 +167,8 @@ class Phase:
 
                 filtered_epochs[(f,h)] = epochs
         filtered_epochs = pd.Series(filtered_epochs)
-        filtered_epochs.index = pd.MultiIndex.from_tuples(filtered_epochs.index, names=["Frequency", "Harmonic"])
+        filtered_epochs.index = pd.MultiIndex.from_tuples(filtered_epochs.index, names=["Frequency", "Harmonic"])            
+
         return filtered_epochs
 
     @staticmethod

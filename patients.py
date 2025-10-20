@@ -103,7 +103,7 @@ def eeg(src, passband, notch = 50, plot: bool = False)-> BaseRaw:
     raw.notch_filter(freqs=(lowpass), notch_widths=(lowpass)/line_freq, picks=["eeg"], verbose='ERROR')
 
     if plot:
-        raw.plot(scalings = "auto", title="Filtered EEG data", show=True, block=False)
+        raw.plot(scalings = "auto", title="Filtered EEG data", show=True, block=True)
 
     return raw
 
