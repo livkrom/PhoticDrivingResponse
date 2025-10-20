@@ -25,9 +25,9 @@ class Phase:
         
         :EEG: filtered EEG data, should contain trigger timing in annotations.
         """
-        df_stim = self._stimulation_phase(self.eeg)
+        df_stim = self._stimulation_phase(self.eeg, base=False)
         filtered_epochs = self._epoch_phase(df_stim, self.eeg, upper_lim = 40)
-        phases = self._fft_phase(filtered_epochs, occi=True, plot = False, save=False)
+        phases = self._fft_phase(filtered_epochs, occi=True, plot=False, save=False)
 
         return phases
 
@@ -86,12 +86,20 @@ class Phase:
                     if np.isnan(f):
                         continue
                     start = rep_epochs["sample"].min() - 0.1*sfreq - tmax*sfreq
-                    period_samples = sfreq / freq
+                    period_samples = sfreq / f
                     baseline_samples = np.arange(start, start + (tmax * sfreq), period_samples)
+                    used_samples = set()
 
                     for sample in baseline_samples:
+
+                        # unieke offsets nodig MNE
+                        event_sample = int(sample + rep)
+                        while event_sample in used_samples:
+                            event_sample += 1
+
+                        used_samples.add(event_sample)
                         baseline_blocks.append({
-                            "sample": int(sample + rep), # unieke offsets nodig MNE
+                            "sample": int(event_sample), 
                             "previous": int(0),
                             "freq": int(f),
                             "rep": int(rep),
@@ -140,7 +148,7 @@ class Phase:
             MultiIndex DataFrame listing all frequency-harmonic pairs.
         """
         threshold = 1e-6
-        channels_dropped = ['EOG'] + [ch for ch in raw.ch_names if np.all(np.abs(raw.get_data(picks=ch)) < threshold)]
+        channels_dropped = set(['EOG'] + [ch for ch in raw.ch_names if np.all(np.abs(raw.get_data(picks=ch)) < threshold)])
         raw.drop_channels([ch for ch in channels_dropped if ch in raw.ch_names])
         print(f"Dropped channels: {channels_dropped}")
 
@@ -219,7 +227,14 @@ class Phase:
             angles[(f,h)] = np.angle(fft_data[:, :, center_idx])
             plv = np.abs(np.mean(np.exp(1j * angles[(f,h)]), axis=0))
 
-            phases[(f,h)] = {"angles": angles[(f,h)], "plv": dict(zip(ch_names, plv)), "ch_names": ch_names}
+            mean_plv = np.mean(plv)
+            mean_phase = np.angle(np.mean(np.exp(1j * np.angle(np.mean(np.exp(1j * angles[(f, h)]), axis=0)))))
+
+            phases[(f,h)] = {"angles": angles[(f,h)], 
+                             "plv": dict(zip(ch_names, plv)), 
+                             "ch_names": ch_names,
+                             "mean_plv": mean_plv,
+                             "mean_phase": mean_phase}
 
         if plot:
             colors = plt.get_cmap('tab10').colors
@@ -273,6 +288,8 @@ class Phase:
                     row[f"{ch_name}_plv"] = ch_dict["plv"][ch_name]
                     row[f"{ch_name}_angles"] = np.degrees(np.angle(np.mean(np.exp(1j * ch_dict["angles"][:, ch_idx]))))
 
+                row["mean_plv"] = ch_dict["mean_plv"]
+                row["mean_phase"] = np.degrees(ch_dict["mean_phase"])
                 rows.append(row)
 
             df = pd.DataFrame(rows)

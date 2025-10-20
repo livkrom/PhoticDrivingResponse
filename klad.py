@@ -32,7 +32,7 @@ time_map = {
     "t1": ["t0", "t1"],
     "t2": ["t0", "t1"]
 }
-parser.add_argument("-t", "--time", choices = time_map.keys(), default="t0",
+parser.add_argument("-t", "--time", choices = time_map.keys(), default="t2",
                     help = "Choose point in time: t0, t1 or t2")
 
 while True:
@@ -74,13 +74,14 @@ passband = [0.5, 100]
 
 # Testing phase functions
 raw = eeg(src, passband, notch = 50, plot=False)
-df, baseline_blocks = Phase._stimulation_phase(raw, save=True, base = True)
-# epochs =  Phase._epoch_phase(df, raw)
-# phases = Phase._fft_phase(epochs, occi=True, plot = True, save=False)
+df = Phase._stimulation_phase(raw, save=False, base=False)
+epochs =  Phase._epoch_phase(df, raw)
+phases = Phase._fft_phase(epochs, occi=True, plot = False, save=True)
 
 # Baseline phase functions
-epochs_baseline =  Phase._epoch_phase(baseline_blocks, raw)
-phases_baseline = Phase._fft_phase(epochs_baseline, occi=True, plot = True, save=False)
+# df, baseline_blocks = Phase._stimulation_phase(raw, save=True, base=True)
+# epochs_baseline =  Phase._epoch_phase(baseline_blocks, raw)
+# phases_baseline = Phase._fft_phase(epochs_baseline, occi=True, plot=True, save=False)
 
 
 ## Filtering files function
