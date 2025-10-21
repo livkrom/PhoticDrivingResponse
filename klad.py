@@ -2,11 +2,15 @@
 Kladkladklad 
 Deze module gebruik ik puur om functies te testen.
 """
+import glob, os
 
 from pathlib import Path
 import argparse
 
 import numpy as np
+import seaborn as sns
+import pandas as pd
+
 import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.use("TkAgg")
@@ -109,77 +113,236 @@ from phase import Phase
 # power_path = Path("./results_POWER")
 # stats_base(power_path, paired=True, save=True)
 
-# # # === PHASE RESULTS AAhH ===
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import re
+# # # === POWER RESULTS visualisatie ===
+# Pad naar map
+folder = "results_POWER/"
+files = glob.glob(os.path.join(folder, "*.pkl"))
 
-# ----- SETTINGS -----
-order = [
-    (6, 6), (6, 12), (6, 18), (6, 24), (6, 30), (6, 36),
-    (10, 10), (10, 20), (10, 30), (10, 40),
-    (20, 20), (20, 40)
-]
-freq_labels = [f"{f1}-{f2}" for f1, f2 in order]
+# --- Responders ---
+responders_numbers = ["2", "10", "11", "17", "21", "22", "32", "40", "46", "48", "51", "57", "63"]
+responders = [f"VEP{idx.zfill(2)}" if not idx.startswith("VEP") else idx for idx in responders_numbers]
+time_map = {"1": "t0", "2": "t1", "3": "t2"}
+df_list = []
 
-# ----- LOAD -----
-plv_stim = pd.read_csv("PLV_stim.csv")
-plv_base = pd.read_csv("PLV_base.csv")
+# --- Inlezen en berekenen ---
+for file in files:
+    name = os.path.basename(file).replace(".pkl", "")
+    parts = name.split("_")
+    patient = parts[0]       # bv. 'VEP01'
+    time = parts[1]          # bv. '2'
+    
+    data = pd.read_pickle(file)
 
-# ---- Ensure structure ----
-if plv_stim.shape[0] != len(order):
-    raise ValueError(f"Expected 12 rows (frequency pairs), got {plv_stim.shape[0]}.")
+    # Bereken absolute power per kanaal
+    for ch in ["O1", "O2", "Oz"]:
+        data[f"{ch}_ABS"] = data[f"{ch}_SNR"] + data[f"{ch}_BASE"]
+    
+    # Gemiddelde absolute power (stimulus)
+    data["Average_ABS"] = data[[f"{ch}_ABS" for ch in ["O1", "O2", "Oz"]]].mean(axis=1)
+    
+    # Metadata
+    data["Patient"] = patient
+    data["Time"] = time_map.get(time)
+    data["Group"] = "Responder" if patient in responders else "Non-responder"
+    
+    df_list.append(data)
 
-# ---- Extract condition (t0, t1, t2) from column names ----
-def extract_condition(name):
-    match = re.search(r"_(\d)$", name)
-    if match:
-        idx = match.group(1)
-        return {"1": "t0 (no meds)", "2": "t1 (1 unit)", "3": "t2 (max dose)"}.get(idx, "unknown")
-    return "unknown"
+df = pd.concat(df_list, ignore_index=True)
 
-# Melt stimulation data (long format)
-stim_long = plv_stim.melt(var_name="Patient_Time", value_name="PLV")
-stim_long["FreqPair"] = freq_labels * (plv_stim.shape[1])
-stim_long["Condition"] = stim_long["Patient_Time"].apply(extract_condition)
-stim_long["Patient"] = stim_long["Patient_Time"].apply(lambda x: re.sub(r"_\d$", "", x))
+# --- Filter alleen frequenties < 40 Hz ---
+df = df[df["Harmonic"] < 41].copy()
 
-# Melt baseline data (no time condition)
-base_long = plv_base.melt(var_name="Patient_Time", value_name="PLV")
-base_long["FreqPair"] = freq_labels * (plv_base.shape[1])
-base_long["Condition"] = "Baseline"
-base_long["Patient"] = base_long["Patient_Time"]
+# --- Combineer freq + harmonic voor labeling ---
+df["FreqPair"] = df["Frequency"].astype(str) + " Hz (H" + df["Harmonic"].astype(str) + ")"
 
-# Combine both datasets
-df_all = pd.concat([stim_long, base_long], ignore_index=True)
+# --- Plotinstellingen ---
+sns.set(style="whitegrid")
 
-# ---- Filter valid conditions ----
-condition_order = ["Baseline", "t0 (no meds)", "t1 (1 unit)", "t2 (max dose)"]
+condition_order = ["t0", "t1", "t2"]  # pas aan als je minder tijdspunten hebt
 palette = {
-    "Baseline": "royalblue",
-    "t0 (no meds)": "firebrick",
-    "t1 (1 unit)": "darkorange",
-    "t2 (max dose)": "mediumorchid"
+    "t0": "firebrick",
+    "t1": "darkorange",
+    "t2": "mediumorchid"
 }
-
-# ----- PLOTTING -----
-plt.figure(figsize=(16, 7))
-sns.boxplot(
-    data=df_all,
-    x="FreqPair", y="PLV", hue="Condition",
+# --- Catplot ---
+g = sns.catplot(
+    data=df,
+    x="FreqPair", y="Average_ABS",
+    hue="Time",
     hue_order=condition_order,
+    col="Group",
+    kind="box",
     palette=palette,
     linewidth=0.8,
-    width=0.6,          # thinner boxes for more spacing between freq pairs
-    fliersize=3
+    width=0.55,
+    fliersize=3,
+    sharey=True,
+    col_order=["Responder", "Non-responder"],
+    height=6, aspect=1.3,
+    legend=False
 )
-plt.ylim(0, 1)
-plt.xlabel("Frequency pair (Hz)")
-plt.ylabel("Phase Locking Value (PLV)")
-plt.title("PLV distributions across dose conditions and baseline")
-plt.xticks(rotation=45)
-plt.grid(axis='y', linestyle='--', alpha=0.4)
-plt.legend(title="", frameon=True)
-plt.tight_layout()
+
+# --- Aslabels en layout ---
+g.set(ylim=(df["Average_ABS"][df["Average_ABS"] > 0].min()*0.8, None))
+g.set_axis_labels("Frequency–Harmonic pair (Hz)", "Absolute Power (dB)")
+g.set_titles("{col_name}")
+for ax in g.axes.flatten():
+    ax.grid(axis='y', linestyle='--', alpha=0.4)
+    ax.tick_params(axis='x', rotation=45)
+
+# --- Handmatige legenda ---
+handles, labels = [], []
+for cond, color in palette.items():
+    handles.append(plt.Line2D([], [], color=color, lw=8))
+    labels.append(cond)
+
+for ax in g.axes.flatten():
+    leg = ax.legend(
+        handles, labels,
+        title="Condition",
+        loc="upper right",
+        frameon=True,
+        facecolor="white",
+        edgecolor="gray",
+        fontsize=9
+    )
+    leg.get_frame().set_alpha(0.9)
+
+# --- Titel en layout fine-tuning ---
+g.fig.suptitle("Absolute Power distributions by dose condition and response group", fontsize=15, y=1)
+g.fig.subplots_adjust(top=0.90, right=0.97, wspace=0.15)
 plt.show()
+
+df.to_csv("powers_overview.csv", float_format="%.3f", index=True)
+
+# # # === PHASE RESULTS AAhH visualisatie ===
+# import pandas as pd
+# import matplotlib.pyplot as plt
+# import seaborn as sns
+# import re
+
+# # ----- SETTINGS -----
+# order = [
+#     (6, 6), (6, 12), (6, 18), (6, 24), (6, 30), (6, 36),
+#     (10, 10), (10, 20), (10, 30), (10, 40),
+#     (20, 20), (20, 40)
+# ]
+# freq_labels = [f"{f1}-{f2}" for f1, f2 in order]
+
+# # ----- LOAD -----
+# plv_stim = pd.read_csv("PLV_stim.csv")
+# plv_base = pd.read_csv("PLV_base.csv")
+
+# # ---- Ensure structure ----
+# if plv_stim.shape[0] != len(order):
+#     raise ValueError(f"Expected 12 rows (frequency pairs), got {plv_stim.shape[0]}.")
+
+# # ---- Extract condition (t0, t1, t2) from column names ----
+# def extract_condition(name):
+#     match = re.search(r"_(\d)$", name)
+#     if match:
+#         idx = match.group(1)
+#         return {"1": "t0 (no meds)", "2": "t1 (1 unit)", "3": "t2 (max dose)"}.get(idx, "unknown")
+#     return "unknown"
+
+# # Melt stimulation data (long format)
+# stim_long = plv_stim.melt(var_name="Patient_Time", value_name="PLV")
+# stim_long["FreqPair"] = freq_labels * (plv_stim.shape[1])
+# stim_long["Condition"] = stim_long["Patient_Time"].apply(extract_condition)
+# stim_long["Patient"] = stim_long["Patient_Time"].apply(lambda x: re.sub(r"_\d$", "", x))
+
+# # Melt baseline data (no time condition)
+# base_long = plv_base.melt(var_name="Patient_Time", value_name="PLV")
+# base_long["FreqPair"] = freq_labels * (plv_base.shape[1])
+# base_long["Condition"] = "Baseline"
+# base_long["Patient"] = base_long["Patient_Time"]
+
+# # Combine both datasets
+# df_all = pd.concat([stim_long, base_long], ignore_index=True)
+
+# # ---- Define responders ----
+# responders = {"2", "10", "11", "17", "21", "22", "32", "40", "46", "48", "51", "57", "63"}
+
+# # ---- Assign responder group ----
+# def classify_responder(patient):
+#     # Extract only digits from patient ID
+#     match = re.search(r"(\d+)", patient)
+#     if match and match.group(1) in responders:
+#         return "Responder"
+#     else:
+#         return "Non-responder"
+
+# df_all["ResponseGroup"] = df_all["Patient"].apply(classify_responder)
+
+# # ---- Order and palette ----
+# condition_order = ["Baseline", "t0 (no meds)", "t1 (1 unit)", "t2 (max dose)"]
+# group_order = [f"{c} - Responder" for c in condition_order] + [f"{c} - Non-responder" for c in condition_order]
+
+# # ---- Filter valid conditions ----
+# condition_order = ["Baseline", "t0 (no meds)", "t1 (1 unit)", "t2 (max dose)"]
+# palette = {
+#     "Baseline": "royalblue",
+#     "t0 (no meds)": "firebrick",
+#     "t1 (1 unit)": "darkorange",
+#     "t2 (max dose)": "mediumorchid"
+# }
+
+# # ----- PLOTTING -----
+# sns.set(style="whitegrid")
+
+# # Create the catplot, but don't draw a legend automatically
+# g = sns.catplot(
+#     data=df_all,
+#     x="FreqPair", y="PLV",
+#     hue="Condition",
+#     hue_order=condition_order,
+#     col="ResponseGroup",
+#     kind="box",
+#     palette=palette,
+#     linewidth=0.8,
+#     width=0.55,
+#     fliersize=3,
+#     sharey=True,
+#     col_order=["Responder", "Non-responder"],
+#     height=6, aspect=1.3,
+#     legend=False
+# )
+
+# # Axis and layout formatting
+# g.set_axis_labels("Frequency pair (Hz)", "Phase Locking Value (PLV)")
+# g.set_titles("{col_name}")
+# g.set(ylim=(0, 1))
+
+# for ax in g.axes.flatten():
+#     ax.grid(axis='y', linestyle='--', alpha=0.4)
+#     ax.tick_params(axis='x', rotation=45)
+
+# # ---- Build legend handles from all data (once) ----
+# handles, labels = [], []
+# for cond, color in palette.items():
+#     handles.append(plt.Line2D([], [], color=color, lw=8))
+#     labels.append(cond)
+
+# # ---- Add legends manually to each subplot ----
+# for ax in g.axes.flatten():
+#     leg = ax.legend(
+#         handles, labels,
+#         title="",
+#         loc="upper right",
+#         frameon=True,
+#         facecolor="white",
+#         edgecolor="gray",
+#         fontsize=9
+#     )
+#     leg.get_frame().set_alpha(0.9)
+
+# # ---- Title ----
+# g.fig.suptitle(
+#     "PLV distributions by dose condition and response group",
+#     fontsize=15,
+#     y=1
+# )
+
+# # Adjust spacing to make everything visible
+# g.fig.subplots_adjust(top=0.90, right=0.97, wspace=0.15)
+# plt.show()
