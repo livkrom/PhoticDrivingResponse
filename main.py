@@ -3,54 +3,46 @@ This is the main module that calls all made functions.
 """
 from pathlib import Path
 import pandas as pd
-from patients import parse_args, patient_files, eeg, filter_files
+from patients import parse_args, patient_files, eeg, save_pickle_results, filter_files
 from power import Power
 from phase import Phase
-from analytics import stats_base
+from analytics import stats_base_power, stats_power
 
 if __name__ == "__main__":
     # Reading data
     trial_map, time_map, args = parse_args()
     pt_files = patient_files(trial_map, args)
-    skipped, complete = [], []
+    skipped, complete_power, complete_plv = [], [], []
 
     passband = [0.5, 100]
     all_mean_plv = {}
+    folder_power = "results_POWER"
+    folder_plv = "results_PLV"
+
     for pt_file in pt_files:
         print(f"Processing {pt_file.name}...")
-        raw = eeg(pt_file, passband, occi=True, plot=False)
 
-        # # Power calculation
-        # try: 
-        #     power_path = Path("./results_POWER")
-        #     power = Power(passband, raw).run()
-        #     power_path_singles = power_path / f"{pt_file.stem}_power.pkl"
-        #     power_path_singles.parent.mkdir(parents=True, exist_ok=True)
-        #     power.to_pickle(power_path_singles)
-        #     complete.append(pt_file)
-        #     print(f"Saved powers to {power_path_singles}")
-        # except Exception as e: # pylint: disable=broad-except
-        #     print(f"Skipping power calculation of {pt_file.name} due to error: {e}")
-        #     skipped.append((pt_file.name, "Power", str(e)))
-        #     continue
+        # Power calculation
+        try: 
+            raw = eeg(pt_file, passband, occi=True, plot=False)
+            power = Power(passband, raw).run()
+            save_pickle_results(power, pt_file, folder_power, complete_power, feat="power", verbose=True)
+
+        except Exception as e: # pylint: disable=broad-except
+            print(f"Skipping power calculation of {pt_file.name} due to error: {e}")
+            skipped.append((pt_file.name, "Power", str(e)))
+            continue
         
         # PLV calculation
         try:
-            phase_path = Path("./results_PLV")
-            phases = Phase(passband, raw).run()
-            # df, df_base = Phase._stimulation_phase(raw, save=False, base=True)
-            # epochs_baseline =  Phase._epoch_phase(df_base, raw)
-            # phases = Phase._fft_phase(epochs_baseline, occi=True, plot=False, save=False)
-            patient_plv = {k: v["mean_plv"] for k, v in phases.items()}
-            all_mean_plv[pt_file.stem] = pd.Series(patient_plv)
+            raw = eeg(pt_file, passband, occi=True, plot=False)
+            plv_stim, plv_base = Phase(passband, raw).run()
+            save_pickle_results([plv_stim, plv_base], pt_file, folder_plv, complete_plv, feat="plv", verbose=True)
+
         except Exception as e:
             print(f"Skipping phase calculation of {pt_file.name} due to Phase error: {e}")
-            skipped.append((pt_file.name, "Phase", str(e)))
+            skipped.append((pt_file.name, "PLV", str(e)))
             continue
-
-    df_plv = pd.DataFrame(all_mean_plv)
-    df_plv.to_csv('PLV.csv', index=True)
-    print(f"Saved PLV to {phase_path}")
 
     print("Folder analysis completed.")
     if skipped:
@@ -62,5 +54,9 @@ if __name__ == "__main__":
     # complete_power = filter_files(list(power_path.glob("*_power.pkl")), time_map, args)
     # print(f"In power calculation, complete sets of files for: {complete_power}")
 
-    # # Statistics
-    # stats_base(power_path, paired=True, save=True) # Power
+    # Statistics
+    responder_ids = {"2", "10", "11", "17", "21", "22", "32", "40", "46", "48", "51", "57", "63"}
+    stats_base_power(folder_power, paired=True, save=True) # Power baseline
+    stats_power(responder_ids, folder_power,paired=True, save=False, plot=True)
+    stats_phase(responder_ids, folder_plv, )
+

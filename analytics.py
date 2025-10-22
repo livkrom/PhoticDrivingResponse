@@ -2,20 +2,25 @@
 Analytics
 """
 import re
+import os
+import glob
 from pathlib import Path
 from scipy.stats import wilcoxon, friedmanchisquare, mannwhitneyu, kruskal, chi2
-#import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+import seaborn as sns
 
 
-def stats_base(power_path: Path, paired: bool = True, save: bool = True):
+def stats_base_power(folder_power: str, paired: bool = True, save: bool = False):
     """
     Checks if there is a difference in baseline frequencies.
     In this code we average over all given baseline channels. 
 
     Parameters
     ----------
+    :folder_power: str
+        Name of the patient file: VEPxx_T, xx = patient ID, T = timepoint.
     :files: List[Path]
         List containing all Path objects for successfully processed files.
     :paired: bool
@@ -23,7 +28,8 @@ def stats_base(power_path: Path, paired: bool = True, save: bool = True):
     :save: bool
         Option to save the made baseline statistics dataframe. 
     """
-    files = list(power_path.glob("*_power.pkl"))
+    path_power = Path(f"./{folder_power}")
+    files = list(path_power.glob("*_power.pkl"))
     baselines = {}
     timepoints = set()
 
@@ -38,7 +44,7 @@ def stats_base(power_path: Path, paired: bool = True, save: bool = True):
         timepoints.add(timepoint)
 
         df = pd.read_pickle(file)
-        channels = [c for c in df.columns if c.endswith("_BASE")]
+        channels = [c for c in df.columns if c.endswith("_BASE")and not c.startswith("Average")]
         df['Baseline_avg'] = df[channels].mean(axis=1)
         df = df[["Frequency", "Harmonic", "Baseline_avg"]].copy()
 
@@ -114,14 +120,16 @@ def stats_base(power_path: Path, paired: bool = True, save: bool = True):
 
     return df_results
 
-def stats_power(power_path: Path, paired: bool = True, save: bool = True, abs: bool = True):
+def stats_power(responder_IDs: list, folder_power: str, paired: bool = True, save: bool = False, plot: bool = True):
     """
     This code checks if there is a statistical difference between the different timepoints.
 
     Parameters
     ----------
-    :files: List[Path]
-        List containing all Path objects for successfully processed files.
+    :responders_numbers:
+        List of patient_IDs corresponding to patients that respond to the medication. 
+    :folder_power: str
+        Name of the patient file: VEPxx_T, xx = patient ID, T = timepoint.
     :paired: bool
         For now we are testing on paired data, but this will not always be the case. 
     :save: bool
@@ -129,4 +137,74 @@ def stats_power(power_path: Path, paired: bool = True, save: bool = True, abs: b
     :abs: bool
         Option to either use absolute or relative values. 
     """
-    
+
+    if plot:
+        path_power = Path(f"./{folder_power}")
+        responders = [f"VEP{idx.zfill(2)}" if not idx.startswith("VEP") else idx for idx in responder_IDs]
+        time_map = {"1": "t0", "2": "t1", "3": "t2"}
+        df_patient = []
+
+        files = glob.glob(os.path.join(path_power, "*.pkl"))
+        for file in files:
+            name = os.path.basename(file).replace(".pkl", "")
+            parts = name.split("_")
+            patient = parts[0]
+            time = parts[1]
+
+            data = pd.read_pickle(file)
+
+            data["Patient"] = patient
+            data["Time"] = time_map.get(time)
+            data["Group"] = "Responder" if patient in responders else "Non-responder"
+            data["Absolute Power"] = data["Average_BASE"]
+
+            df_patient.append(data)
+        df = pd.concat(df_patient, ignore_index=True)
+        df["FreqPair"] = df["Harmonic"].astype(str) + " Hz (S: " + df["Frequency"].astype(str) +")"
+
+        sns.set(style="whitegrid")
+        g = sns.catplot(data=df, x="FreqPair", y="Absolute Power",
+                        hue="Time", col="Group", kind='box',
+                        palette="Set3", linewidth=0.8, width=0.55,
+                        fliersize=3, sharey=True, col_order=["Responder", "Non-Responder"],
+                        height=6, aspect=1.3, legend=False)
+        g.set(ylim=(df["Average_ABS"][df["Average_ABS"] > 0].min()*0.8, None))
+
+        g.set_axis_labels("Analyzed Frequency (Hz) - Stimulation Frequency (Hz)", "Absolute Power (dB µV^2)")
+        g.set_titles("{col_name}")
+        for ax in g.ax.flatten():
+            ax.grid(axis='y', linestyle='--', alpha=0.4)
+            ax.tick_params(axis='x', rotation=45)
+
+        handles, labels = [], []
+        for ax in g.axes.flatten:
+            legend = ax.legend(
+                handles, labels, title="Condition",
+                loc="upper right", frameon=True, facecolor="white",
+                edgecolor="gray", fontsize=9)
+            legend.get_frame().set_alpha(0.9)
+
+        g.fig.suptitle("Absolute Power distributions by dose condition and response group", fontsize=15, y=1)
+        g.fig.subplots_adjust(top=0.90, right=0.97, wspace=0.15)
+        plt.show()
+
+def stats_phase(responder_IDs: list, folder_power: str, paired: bool = True, save: bool = True, plot: bool = True):
+    """
+    This code checks if there is a statistical difference between the different timepoints.
+
+    Parameters
+    ----------
+    :responders_numbers:
+        List of patient_IDs corresponding to patients that respond to the medication. 
+    :folder_power: str
+        Name of the patient file: VEPxx_T, xx = patient ID, T = timepoint.
+    :paired: bool
+        For now we are testing on paired data, but this will not always be the case. 
+    :save: bool
+        Option to save the made baseline statistics dataframe.
+    :abs: bool
+        Option to either use absolute or relative values. 
+    """
+
+    if plot:
+        

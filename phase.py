@@ -25,11 +25,13 @@ class Phase:
         
         :EEG: filtered EEG data, should contain trigger timing in annotations.
         """
-        df_stim = self._stimulation_phase(self.eeg, base=False)
-        filtered_epochs = self._epoch_phase(df_stim, self.eeg, upper_lim = 40)
-        phases = self._fft_phase(filtered_epochs, occi=True, plot=False, save=False)
+        df_stim, df_base = self._stimulation_phase(self.eeg, base=True)
+        epochs_stim = self._epoch_phase(df_stim, self.eeg, upper_lim = 40)
+        epochs_base = self._epoch_phase(df_base, self.eeg, upper_lim = 40)
+        plv_stim = self._fft_phase(epochs_stim, plot=False, save=False)
+        plv_base = self._fft_phase(epochs_base, plot=False, save=False)
 
-        return phases
+        return plv_stim, plv_base
 
     @staticmethod
     def _stimulation_phase(raw:BaseRaw, save: bool = False, base: bool = False) -> pd.DataFrame:
@@ -73,14 +75,14 @@ class Phase:
                 rep_freqs.add(freq)
             df.loc[df["block"] == block_id, "rep"] = int(rep)
         df.drop(["event_id"], axis=1, inplace=True)
-        
+
         # Option to create baseline blocks
         if base:
             baseline_blocks = []
             df_epochs = df.loc[df.groupby("block")["sample"].idxmin()].reset_index(drop=True)
             df_epochs["ends"] = df.groupby("block")["sample"].max().values
             tmax = int(math.ceil(((df_epochs["ends"] - df_epochs["sample"]) / sfreq).min()))
-            
+
             for rep, rep_epochs in df.groupby("rep"):
                 for f in rep_epochs["freq"].unique():
                     if np.isnan(f):
@@ -146,14 +148,8 @@ class Phase:
         freqs : pd.DataFrame
             MultiIndex DataFrame listing all frequency-harmonic pairs.
         """
-        threshold = 1e-6
-        channels_dropped = set(['EOG'] + [ch for ch in raw.ch_names if np.all(np.abs(raw.get_data(picks=ch)) < threshold)])
-        raw.drop_channels([ch for ch in channels_dropped if ch in raw.ch_names])
-        print(f"Dropped channels: {channels_dropped}")
-
         freqs_stim = df["freq"].unique()
         filtered_epochs = {}
-        tmin = 0.05
         cycles = 1.5
 
         np_epochs = df[["sample", "previous", "freq"]].to_numpy(dtype=int)
@@ -168,18 +164,18 @@ class Phase:
                 raw_copy = raw.copy()
                 raw_filt = raw_copy.filter(l_freq=l_freq, h_freq=h_freq, picks="eeg", phase='zero', verbose="ERROR")
 
-                tmax = (cycles/h)+tmin
-                epochs = mne.Epochs(raw_filt, np_epochs, event_id={str(f):f}, tmin=tmin, tmax=tmax,
+                tmax = cycles/h
+                epochs = mne.Epochs(raw_filt, np_epochs, event_id={str(f):f}, tmin=0, tmax=tmax,
                                 baseline=None, preload=True, verbose="ERROR")
 
                 filtered_epochs[(f,h)] = epochs
         filtered_epochs = pd.Series(filtered_epochs)
-        filtered_epochs.index = pd.MultiIndex.from_tuples(filtered_epochs.index, names=["Frequency", "Harmonic"])            
+        filtered_epochs.index = pd.MultiIndex.from_tuples(filtered_epochs.index, names=["Frequency", "Harmonic"])     
 
         return filtered_epochs
 
     @staticmethod
-    def _fft_phase(filtered_epochs: pd.MultiIndex, occi: bool = False, plot: bool = False,
+    def _fft_phase(filtered_epochs: pd.MultiIndex, plot: bool = False,
                    save: bool = False)-> dict[tuple[float, float], dict[str, float]]:
         """
         Automatically compute FFT for all stimuli and get the phase.
@@ -188,8 +184,6 @@ class Phase:
         ----------
         :filtered_epochs: Pandas MultiIndex
             Multi-index with keys [stim_freq] and [harmonic_freq] and values mne.Epochs objects.
-        :occi: bool, optional
-            Option to choose either all channels or only the occipital ones.
         :plot: bool, optional
             Option to plot the phase-locking values. 
         :save: bool, optional
@@ -204,12 +198,6 @@ class Phase:
         phases = {}
 
         for (f,h) in filtered_epochs.index:
-            # Option to choose occipital channels only.
-            if occi:
-                ep = filtered_epochs[(f,h)].copy().pick(["O1", "O2", "Oz"])
-            else:
-                ep = filtered_epochs[(f,h)].copy().pick("eeg")
-
             ch_names = ep.info["ch_names"]
             sfreq = ep.info["sfreq"]
             data = ep.get_data()
@@ -229,7 +217,7 @@ class Phase:
             mean_plv = np.mean(plv)
             mean_phase = np.angle(np.mean(np.exp(1j * np.angle(np.mean(np.exp(1j * angles[(f, h)]), axis=0)))))
 
-            phases[(f,h)] = {"angles": angles[(f,h)], 
+            phases[(f,h)] = {"angles": angles[(f,h)],
                              "plv": dict(zip(ch_names, plv)), 
                              "ch_names": ch_names,
                              "mean_plv": mean_plv,

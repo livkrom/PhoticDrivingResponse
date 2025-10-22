@@ -26,11 +26,10 @@ class Power:
         
         :EEG: filtered EEG data, should contain trigger timing in annotations.
         """
-        df_stim = self._stimulation_power(self.eeg)
-        epochs, df_epochs = self._epoch_power(df_stim, self.eeg, plot=False)
-        fft_powers, fft_freq, epochs = self._fft_power(self.passband, epochs,
-                                        df_epochs, occi=True, padding = "zeros", plot=False)
-        powers = self._snr(self.passband, epochs, fft_powers, fft_freq, save=False, plot=False, harms=5)
+        df_stim = self._stimulation_power(self.eeg, save=False)
+        epochs, df_epochs = self._epoch_power(df_stim, self.eeg, save=False, plot=False)
+        fft_powers, fft_freq= self._fft_power(epochs, df_epochs, trim=0.0, padding = "zeros", plot=False)
+        powers = self._snr(epochs, fft_powers, fft_freq, harms=5, upper_lim=40, save=False, plot=False)
 
         return powers
 
@@ -78,8 +77,8 @@ class Power:
                 rep_freqs.add(freq)
             df.loc[df["block"] == block_id, "block base"] = int(rep + block_id)
             df.loc[df["block"] == block_id, "rep"] = int(rep)
-
         df.drop(["block", "event_id"], axis=1, inplace=True)
+
         # Option to save the dataframe
         if save:
             df.to_csv("power_stimulation_info.csv", index=False)
@@ -137,11 +136,6 @@ class Power:
             df_epochs.to_csv("power_epochs.csv", float_format="%.3f", index=False)
             print("Epoch dataframe saved as power_epochs.csv")
 
-        threshold = 1e-6
-        channels_dropped = ['EOG'] + [ch for ch in raw.ch_names if np.all(np.abs(raw.get_data(picks=ch)) < threshold)]
-        raw.drop_channels(channels_dropped)
-        print(f"Dropped channels: {channels_dropped}")
-
         np_epochs = df_epochs[["sample", "previous", "freq"]].to_numpy(dtype=int)
         epochs = mne.Epochs(raw, np_epochs, event_id=None, tmin=0, tmax=tmax,
                             baseline=None, preload=True, verbose='ERROR') # pylint: disable=not-callable
@@ -153,15 +147,13 @@ class Power:
         return epochs, df_epochs
 
     @staticmethod
-    def _fft_power(passband: list, epochs, df_epochs: pd.DataFrame, trim: float = 0.0, padding: str = "copy",
-                    occi: bool = False, plot: bool = False)-> tuple[dict, dict]:
+    def _fft_power(epochs, df_epochs: pd.DataFrame, trim: float = 0.0, padding: str = "copy",
+                    upper_lim: int = 40, plot: bool = False)-> tuple[dict, dict]:
         """
         Automatically compute FFT for all blocks.
 
         Parameters
         ----------
-        :passband: 1x2 list
-            List containing the lower and upper frequency in Hz boundary of the passband filter.
         :epochs: mne.Epochs
             EEG data epoched around the different frequencies.
         :df_epochs:
@@ -170,8 +162,8 @@ class Power:
             Time in seconds we trim at epoch start in order to avoid spectral leakage.
         :padding: string, optional
             Option to use padding for epoching, choices: copy, zeros, none. 
-        :occi: bool, optional
-            Option to choose either all channels or only the occipital ones. 
+        :upper_lim: int
+            Maximum analyzed frequency, default 40 Hz.
         :plot: bool, optional
             Option to plot the PSDs pet stimulation frequency. 
 
@@ -179,29 +171,24 @@ class Power:
         -------
         :fft_powers: dictionary
             Containing (reps x freq x chs) amount of lists with power in dB µV²/Hzper bin. 
-            - [rep] = repetition number
+            - [rep] = repetition number, zero contains the average over repetitions
             - [freq] = stimulation frequency 
             - [ch_name] = channel name
         :fft_freqs: list
             Contains the frequencies in Hz per bin. Should be 1 Hz per bin, truncated by the upper passband frequency. 
         """
-        # Option to choose occipital channels only.
-        if occi:
-            ep = epochs.copy().pick(["O1", "O2", "Oz"])
-        else:
-            ep = epochs.copy().pick("eeg")
 
         # Option to trim epochs to avoid transient onset of the brain.
         if trim > 0:
-            t0 = ep.tmin + trim
-            if t0 >= ep.tmax:
+            t0 = epochs.tmin + trim
+            if t0 >= epochs.tmax:
                 raise ValueError("trim too large for epoch duration")
-            ep = ep.crop(tmin=t0, tmax=ep.tmax)
+            epochs = epochs.crop(tmin=t0, tmax=epochs.tmax)
 
         # Data retrieval
-        data = ep.get_data()
-        sfreq = ep.info["sfreq"]
-        ch_names = ep.info["ch_names"]
+        data = epochs.get_data()
+        sfreq = epochs.info["sfreq"]
+        ch_names = epochs.info["ch_names"]
 
         reps =int((df_epochs["rep"]).max())
         freqs = sorted(df_epochs["freq"].dropna().astype(int).unique())
@@ -212,7 +199,7 @@ class Power:
         window_length = int(sfreq)
         step = int(window_length * overlap)
         fft_freq= rfftfreq(window_length, 1/sfreq).squeeze()
-        mask = fft_freq <= passband[1]
+        mask = fft_freq <= upper_lim
         fft_freq = fft_freq[mask]
 
         window = np.hanning(window_length)
@@ -252,7 +239,7 @@ class Power:
                 # Convert to dB
                 fft_powers[rep][freq][ch_name] = (10*np.log10(np.mean(segments_powers, axis=0) * 1e12))
 
-                # Average across reps for baseline
+                # Average across reps for baseline and
                 if rep == reps:
                     fft_power_values = [fft_powers[r][freq][ch_name] for r in fft_powers.keys() if r!=0]
                     fft_powers[0][freq][ch_name] = np.mean(fft_power_values, axis=0)
@@ -278,28 +265,26 @@ class Power:
                 ax.grid(True, linestyle='dotted', alpha=0.6)
 
                 if f > 0:
-                    for h in range(1, int(math.floor(passband[1]/f))):
+                    for h in range(1, int(math.floor(upper_lim/f))):
                         harmonic = f * h
                         ax.axvline(harmonic, color='gray', linestyle='dotted', linewidth=1)
             plt.tight_layout()
             plt.show()
-        return fft_powers, fft_freq, ep
+        return fft_powers, fft_freq
 
     @staticmethod
-    def _snr(passband: list, epochs, fft_powers: dict, fft_freq: dict, save: bool = False, plot: bool = False,
-             harms: int = 4, montage="standard_1020")-> pd.DataFrame:
+    def _snr(epochs, fft_powers: dict, fft_freq: dict, save: bool = False, plot: bool = False,
+             harms: int = 4, upper_lim: int = 40, montage="standard_1020")-> pd.DataFrame:
         """
         Computes the SNR's for different frequencies. 
 
         Parameters
         ----------
-        :passband: 1x2 list
-            List containing the lower and upper frequency in Hz boundary of the passband filter.
         :epochs: mne.Epochs
             EEG data epoched around the different frequencies.
         :fft_powers: dictionary
             Containing (reps x freq x chs) amount of lists with power in dB µV²/Hzper bin. 
-            - [rep] = repetition number
+            - [rep] = repetition number, zero contains the average over repetitions
             - [freq] = stimulation frequency 
             - [ch_name] = channel name
         :fft_freqs: list
@@ -310,6 +295,8 @@ class Power:
             Option to plot a topomop of the different SNRs.
         :harms: int
             The number of harmonics of the stimulation frequencies to plot in topomap.
+        :upper_lim: int
+            Maximum analyzed frequency, default 40 Hz.
         :montage: string
             Type of montage used during data acquisition. Standard: 10-20 system. Needed for topomap.
 
@@ -321,36 +308,44 @@ class Power:
 
         freqs = [f for f in fft_powers[1].keys() if f != 0]
         ch_names = epochs.info["ch_names"]
-        rows_snr, rows_base = [], []
+        rows_all = []
 
         for freq in freqs:
-            harmonics = [freq * i for i in range(1, math.floor(passband[1]/freq)+1)]
+            harmonics = [freq * i for i in range(1, math.floor(upper_lim/freq)+1)]
 
             for h in harmonics:
                 bin_idx = int(np.argmin(np.abs(np.array(fft_freq) - h)))
 
+                powers_absolute = {ch: fft_powers[0][freq][ch][bin_idx] for ch in ch_names}
+                powers_baseline = {ch: fft_powers[0][0][ch][bin_idx] for ch in ch_names}
                 powers_snr = {
                     ch: fft_powers[0][freq][ch][bin_idx] - fft_powers[0][0][ch][bin_idx]
                     for ch in ch_names}
-                powers_baseline = { ch: fft_powers[0][0][ch][bin_idx] for ch in ch_names }
 
-                rows_snr.append({"Frequency": freq, "Harmonic": h,
-                                 "Average": np.mean(list(powers_snr.values())), **powers_snr})
-                rows_base.append({"Frequency": freq, "Harmonic": h, **powers_baseline})
-
-        df_snr = pd.DataFrame(rows_snr)
-        df_all = df_snr.merge(pd.DataFrame(rows_base), on=["Frequency", "Harmonic"], suffixes=("_SNR", "_BASE"))
+                row = {"Frequency": freq,
+                        "Harmonic": h,
+                        # compute averages for each metric across channels
+                        "Average_SNR": np.mean(list(powers_snr.values())),
+                        "Average_BASE": np.mean(list(powers_baseline.values())),
+                        "Average_PWR": np.mean(list(powers_absolute.values())),
+                        **{f"{ch}_SNR": val for ch, val in powers_snr.items()},
+                        **{f"{ch}_BASE": val for ch, val in powers_baseline.items()},
+                        **{f"{ch}_PWR": val for ch, val in powers_absolute.items()}}
+                rows_all.append(row)
+        df_all = pd.DataFrame(rows_all)
 
         if save:
             df_all.to_csv("powers.csv", float_format="%.3f", index=False)
 
         if plot:
+            df_snr = df_all[["Frequency", "Harmonic"] + [c for c in df_all.columns if "_SNR" in c]]
+            ch_names = [f"{ch}_SNR" for ch in ch_names]
             fig, axes = plt.subplots(len(freqs), harms, figsize=((harms*6), len(freqs)*5))
             axes = np.atleast_2d(axes)
             epochs.set_montage(montage)
             pos = mne.channels.layout._find_topomap_coords(epochs.info, picks='eeg') # pylint: disable=protected-access
             dx, dy = [0, -0.02]
-            pos_shifted = pos+np.array([dx, dy])
+            pos_shifted = pos+np.array([dx, dy])  #Om ook in de outline te passen
             vmax = df_snr[ch_names].max().max()
             vmin = -vmax
             sm = matplotlib.cm.ScalarMappable(cmap='RdBu_r', norm=matplotlib.colors.Normalize(vmin=vmin, vmax=vmax))
@@ -366,13 +361,14 @@ class Power:
                         axes[i, h].set_yticks([])
                         continue
                     axes[i, h].set_title(f"{freq} Hz, h={freq * (h+1)}")
-                    mne.viz.plot_topomap(powers_snr, pos_shifted, axes=axes[i, h], show=False, outlines="head",
-                                         sensors=True, vlim=(vmin, vmax), names=[f"{v:.1f}" for v in powers_snr])
+                    mne.viz.plot_topomap(powers_snr, pos_shifted, axes=axes[i, h],
+                                         show=False, outlines="head", sensors=True,
+                                         ßvlim=(vmin, vmax), names=[f"{v:.1f}" for v in powers_snr])
                     for text in axes[i, h].texts:
                         text.set_fontsize(5)
 
             fig.suptitle("SNR Topomaps", fontsize=16)
-            fig.subplots_adjust(left=0.05, right=0.85, bottom=0.05, top=0.95, wspace=0.3, hspace=0.4)
+            fig.subplots_adjust(left=0.05, right=0.85, bottom=0.05, top=0.90, wspace=0.3, hspace=0.4)
             cbar_ax = fig.add_axes([0.87, 0.15, 0.03, 0.7])
             fig.colorbar(sm, cax=cbar_ax, label='SNR (dB µV^2 / Hz)')
             plt.show()

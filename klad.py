@@ -19,43 +19,43 @@ import mne
 from mne.io.base import BaseRaw
 
 from patients import parse_args, patient_files, eeg, filter_files
-# from power import Power
+from power import Power
 from phase import Phase
 #from analytics import stats_base
 
-# parser = argparse.ArgumentParser()
-# trial_map = {
-#     "t0": "T0_T1_T2",
-#     "t1": "T0_T1",
-#     "t2": "T0_T1"}
-# parser.add_argument("-tr", "--trial", choices = trial_map.keys(), default="t0",
-# help = "Choose trial map: t0, t1 or t2")
+parser = argparse.ArgumentParser()
+trial_map = {
+    "t0": "T0_T1_T2",
+    "t1": "T0_T1",
+    "t2": "T0_T1"}
+parser.add_argument("-tr", "--trial", choices = trial_map.keys(), default="t0",
+help = "Choose trial map: t0, t1 or t2")
 
-# time_map = {
-#     "t0": ["t0", "t1", "t2"],
-#     "t1": ["t0", "t1"],
-#     "t2": ["t0", "t1"]
-# }
-# parser.add_argument("-t", "--time", choices = time_map.keys(), default="t2",
-#                     help = "Choose point in time: t0, t1 or t2")
+time_map = {
+    "t0": ["t0", "t1", "t2"],
+    "t1": ["t0", "t1"],
+    "t2": ["t0", "t1"]
+}
+parser.add_argument("-t", "--time", choices = time_map.keys(), default="t2",
+                    help = "Choose point in time: t0, t1 or t2")
 
-# while True:
-#     args = parser.parse_args()
-#     if args.time not in time_map[args.trial]:
-#         print(f"Error: timepoint {args.time} is not in trial {args.trial}")
-#         print("Please choose again.")
-#         continue
-#     break
+while True:
+    args = parser.parse_args()
+    if args.time not in time_map[args.trial]:
+        print(f"Error: timepoint {args.time} is not in trial {args.trial}")
+        print("Please choose again.")
+        continue
+    break
 
-# data_map = {
-#     "t0": "1",
-#     "t1": "2",
-#     "t2": "3"
-# }
+data_map = {
+    "t0": "1",
+    "t1": "2",
+    "t2": "3"
+}
 
-# pt = "VEP38_" + data_map[args.time] + ".cnt"
-# src = Path('/Volumes/Docs/Bruikbare Data') / trial_map[args.trial] / args.time / pt
-# passband = [0.5, 100]
+pt = "VEP38_" + data_map[args.time] + ".cnt"
+src = Path('/Volumes/Docs/Bruikbare Data') / trial_map[args.trial] / args.time / pt
+passband = [0.5, 100]
 
 # # Comparing EEG without max filter
 # eeg = eeg(src, passband, notch = 50, plot=True)
@@ -66,21 +66,18 @@ from phase import Phase
 # raw.notch_filter(freqs=(lowpass), notch_widths=(lowpass)/line_freq, picks=["eeg"], verbose='ERROR')
 # raw.plot(scalings = "auto", title="Non-Filtered EEG data", show=True, block=False)
 
-# plt.show(block=True)
 # Testing power functions
-# eeg = eeg(src, passband, notch = 50, plot=True)
+# eeg = eeg(src, passband, notch = 50, occi=False, plot=False)
 # df = Power._stimulation_power(eeg, save=False)
-# epochs, df_epochs = Power._epoch(df, eeg, save=False, plot=True)
-# fft_powers, fft_freqs, epochs = Power._fft_blocks(passband, epochs, df_epochs, t
-# rim=0.0, padding= "copy", occi=True, plot=False)
-# powers = Power._snr(passband, epochs, fft_powers, fft_freqs, save=True, plot=True,
-# harms=4, montage="standard_1020")
+# epochs, df_epochs = Power._epoch_power(df, eeg, save=False, plot=False)
+# fft_powers, fft_freqs = Power._fft_power(epochs, df_epochs, trim=0.0, padding= "zeros", upper_lim = 40, plot=False)
+# powers = Power._snr(epochs, fft_powers, fft_freqs, save=True, plot=True, harms=4, upper_lim=40, montage="standard_1020")
 
 # Testing phase functions
-# raw = eeg(src, passband, notch = 50, plot=False)
-# df = Phase._stimulation_phase(raw, save=False, base=False)
-# epochs =  Phase._epoch_phase(df, raw)
-# phases = Phase._fft_phase(epochs, occi=True, plot = False, save=True)
+raw = eeg(src, passband, notch = 50, plot=False)
+df = Phase._stimulation_phase(raw, save=False, base=False)
+epochs =  Phase._epoch_phase(df, raw)
+phases = Phase._fft_phase(epochs, occi=True, plot = False, save=True)
 
 # Baseline phase functions
 # raw = eeg(src, passband, notch = 50, occi=True, plot=False)
@@ -113,107 +110,16 @@ from phase import Phase
 # power_path = Path("./results_POWER")
 # stats_base(power_path, paired=True, save=True)
 
-# # # === POWER RESULTS visualisatie ===
-# Pad naar map
-folder = "results_POWER/"
-files = glob.glob(os.path.join(folder, "*.pkl"))
 
-# --- Responders ---
-responders_numbers = ["2", "10", "11", "17", "21", "22", "32", "40", "46", "48", "51", "57", "63"]
-responders = [f"VEP{idx.zfill(2)}" if not idx.startswith("VEP") else idx for idx in responders_numbers]
-time_map = {"1": "t0", "2": "t1", "3": "t2"}
-df_list = []
 
-# --- Inlezen en berekenen ---
-for file in files:
-    name = os.path.basename(file).replace(".pkl", "")
-    parts = name.split("_")
-    patient = parts[0]       # bv. 'VEP01'
-    time = parts[1]          # bv. '2'
-    
-    data = pd.read_pickle(file)
+# # --- Aslabels en layout ---
+# g.set(ylim=(df["Average_ABS"][df["Average_ABS"] > 0].min()*0.8, None))
+# g.set_axis_labels("Frequency–Harmonic pair (Hz)", "Absolute Power (dB)")
+# g.set_titles("{col_name}")
+# for ax in g.axes.flatten():
+#     ax.grid(axis='y', linestyle='--', alpha=0.4)
+#     ax.tick_params(axis='x', rotation=45)
 
-    # Bereken absolute power per kanaal
-    for ch in ["O1", "O2", "Oz"]:
-        data[f"{ch}_ABS"] = data[f"{ch}_SNR"] + data[f"{ch}_BASE"]
-    
-    # Gemiddelde absolute power (stimulus)
-    data["Average_ABS"] = data[[f"{ch}_ABS" for ch in ["O1", "O2", "Oz"]]].mean(axis=1)
-    
-    # Metadata
-    data["Patient"] = patient
-    data["Time"] = time_map.get(time)
-    data["Group"] = "Responder" if patient in responders else "Non-responder"
-    
-    df_list.append(data)
-
-df = pd.concat(df_list, ignore_index=True)
-
-# --- Filter alleen frequenties < 40 Hz ---
-df = df[df["Harmonic"] < 41].copy()
-
-# --- Combineer freq + harmonic voor labeling ---
-df["FreqPair"] = df["Frequency"].astype(str) + " Hz (H" + df["Harmonic"].astype(str) + ")"
-
-# --- Plotinstellingen ---
-sns.set(style="whitegrid")
-
-condition_order = ["t0", "t1", "t2"]  # pas aan als je minder tijdspunten hebt
-palette = {
-    "t0": "firebrick",
-    "t1": "darkorange",
-    "t2": "mediumorchid"
-}
-# --- Catplot ---
-g = sns.catplot(
-    data=df,
-    x="FreqPair", y="Average_ABS",
-    hue="Time",
-    hue_order=condition_order,
-    col="Group",
-    kind="box",
-    palette=palette,
-    linewidth=0.8,
-    width=0.55,
-    fliersize=3,
-    sharey=True,
-    col_order=["Responder", "Non-responder"],
-    height=6, aspect=1.3,
-    legend=False
-)
-
-# --- Aslabels en layout ---
-g.set(ylim=(df["Average_ABS"][df["Average_ABS"] > 0].min()*0.8, None))
-g.set_axis_labels("Frequency–Harmonic pair (Hz)", "Absolute Power (dB)")
-g.set_titles("{col_name}")
-for ax in g.axes.flatten():
-    ax.grid(axis='y', linestyle='--', alpha=0.4)
-    ax.tick_params(axis='x', rotation=45)
-
-# --- Handmatige legenda ---
-handles, labels = [], []
-for cond, color in palette.items():
-    handles.append(plt.Line2D([], [], color=color, lw=8))
-    labels.append(cond)
-
-for ax in g.axes.flatten():
-    leg = ax.legend(
-        handles, labels,
-        title="Condition",
-        loc="upper right",
-        frameon=True,
-        facecolor="white",
-        edgecolor="gray",
-        fontsize=9
-    )
-    leg.get_frame().set_alpha(0.9)
-
-# --- Titel en layout fine-tuning ---
-g.fig.suptitle("Absolute Power distributions by dose condition and response group", fontsize=15, y=1)
-g.fig.subplots_adjust(top=0.90, right=0.97, wspace=0.15)
-plt.show()
-
-df.to_csv("powers_overview.csv", float_format="%.3f", index=True)
 
 # # # === PHASE RESULTS AAhH visualisatie ===
 # import pandas as pd

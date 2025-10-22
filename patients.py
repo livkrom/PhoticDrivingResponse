@@ -108,7 +108,7 @@ def eeg(src, passband, notch = 50, occi: bool = False, plot: bool = False)-> Bas
         raw = raw.copy().pick(["O1", "O2", "Oz"])
     else:
         threshold = 1e-6
-        channels_dropped = set(['EOG'] + [ch for ch in raw.ch_names if np.all(np.abs(raw.get_data(picks=ch)) < threshold)])
+        channels_dropped = set(['EOG']+[ch for ch in raw.ch_names if np.all(np.abs(raw.get_data(picks=ch))<threshold)])
         raw.drop_channels([ch for ch in channels_dropped if ch in raw.ch_names])
         print(f"Dropped channels: {channels_dropped}")
 
@@ -116,6 +116,45 @@ def eeg(src, passband, notch = 50, occi: bool = False, plot: bool = False)-> Bas
         raw.plot(scalings = "auto", title="Filtered EEG data", show=True, block=True)
 
     return raw
+
+def save_pickle_results(data, pt_file, folder_name, complete, feat: str = "power",
+                        verbose:bool =False):
+    """
+    Saves dataframes (singles or multiple) as pickle files in designated pathway.
+
+    Parameters
+    ----------
+    :data: pd.DataFrame | tuple | list
+        Name of the patient file: VEPxx_T, xx = patient ID, T = timepoint.
+    :pt_file: str
+        Dataframe containing powers at different frequencies. 
+    :folder_name:
+        Name for the folder to save the pickle files.
+    :complete: list
+        List containing files with completed power analysis. 
+    :feat: str
+        Type of feature that is being saved. Either "power" or "plv". 
+    :verbose: bool, optional
+        Option to print statements. 
+
+    """
+    path = Path(f"./{folder_name}")
+    path.mkdir(parents=True, exist_ok=True)
+
+    if isinstance(data, (tuple, list)) and len(data) == 2 and feat == "plv":
+        endings = ["stim", "base"]
+        for item, ending in zip(data, endings):
+            single_path = path / f"{pt_file.stem}_{feat}_{ending}.pkl"
+            item.to_pickle(single_path)
+    else:
+        single_path = path / f"{pt_file.stem}_{feat}.pkl"
+        data.to_pickle(single_path)
+
+    complete.append(pt_file)
+    if verbose:
+        print(f"Saved {feat}s to {single_path}")
+
+    return
 
 def filter_files(files: List[Path], time_map, args):
     """
