@@ -7,6 +7,7 @@ import glob
 from pathlib import Path
 from scipy.stats import wilcoxon, friedmanchisquare, mannwhitneyu, kruskal, chi2
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 import pandas as pd
 import numpy as np
 import seaborn as sns
@@ -156,39 +157,50 @@ def stats_power(responder_IDs: list, folder_power: str, paired: bool = True, sav
             data["Patient"] = patient
             data["Time"] = time_map.get(time)
             data["Group"] = "Responder" if patient in responders else "Non-responder"
-            data["Absolute Power"] = data["Average_BASE"]
+            data["Absolute Power"] = data["Average_PWR"]
 
             df_patient.append(data)
         df = pd.concat(df_patient, ignore_index=True)
         df["FreqPair"] = df["Harmonic"].astype(str) + " Hz (S: " + df["Frequency"].astype(str) +")"
 
+        time_order = ["t0", "t1", "t2", "base"]
+        full_palette = dict(zip(time_order, sns.color_palette("Set3", len(time_order))))
+        present_times = [t for t in time_order if t in df["Time"].unique()]
+        filtered_palette = {k: full_palette[k] for k in present_times}
+  
         sns.set(style="whitegrid")
         g = sns.catplot(data=df, x="FreqPair", y="Absolute Power",
-                        hue="Time", col="Group", kind='box',
-                        palette="Set3", linewidth=0.8, width=0.55,
-                        fliersize=3, sharey=True, col_order=["Responder", "Non-Responder"],
+                        hue="Time", hue_order=present_times, col="Group", kind='box',
+                        palette=filtered_palette, linewidth=0.8, width=0.55,
+                        fliersize=3, sharey=True, col_order=["Responder", "Non-responder"],
                         height=6, aspect=1.3, legend=False)
-        g.set(ylim=(df["Average_ABS"][df["Average_ABS"] > 0].min()*0.8, None))
+        g.set(ylim=(df["Absolute Power"][df["Absolute Power"] > 0].min()*0.8, None))
 
         g.set_axis_labels("Analyzed Frequency (Hz) - Stimulation Frequency (Hz)", "Absolute Power (dB µV^2)")
-        g.set_titles("{col_name}")
-        for ax in g.ax.flatten():
+        for ax in g.axes.flatten():
             ax.grid(axis='y', linestyle='--', alpha=0.4)
             ax.tick_params(axis='x', rotation=45)
 
-        handles, labels = [], []
-        for ax in g.axes.flatten:
-            legend = ax.legend(
-                handles, labels, title="Condition",
-                loc="upper right", frameon=True, facecolor="white",
-                edgecolor="gray", fontsize=9)
-            legend.get_frame().set_alpha(0.9)
+        group_counts = df.groupby("Group")["Patient"].nunique()
+        for ax, group in zip(g.axes.flatten(), g.col_names):
+            count = group_counts.get(group, 0)
+            ax.set_title(f"{group} (n = {count})", fontsize=13)
+
+        handles = [Patch(facecolor=filtered_palette[t], label=t) for t in present_times]
+        for ax in g.axes.flatten():
+            ax.legend(
+                handles=handles, title="Condition", loc="upper right",
+                frameon=True, facecolor="white", edgecolor="gray", fontsize=9
+            ).get_frame().set_alpha(0.9)
 
         g.fig.suptitle("Absolute Power distributions by dose condition and response group", fontsize=15, y=1)
         g.fig.subplots_adjust(top=0.90, right=0.97, wspace=0.15)
         plt.show()
 
-def stats_phase(responder_IDs: list, folder_power: str, paired: bool = True, save: bool = True, plot: bool = True):
+    if save:
+        df.to_csv("Powers_Abs_All.csv", index=True)
+
+def stats_plv(responder_IDs: list, folder_plv: str, paired: bool = True, save: bool = True, plot: bool = True):
     """
     This code checks if there is a statistical difference between the different timepoints.
 
@@ -207,4 +219,58 @@ def stats_phase(responder_IDs: list, folder_power: str, paired: bool = True, sav
     """
 
     if plot:
+        path_plv = Path(f"./{folder_plv}")
+        responders = [f"VEP{idx.zfill(2)}" if not idx.startswith("VEP") else idx for idx in responder_IDs]
+        time_map = {"1": "t0", "2": "t1", "3": "t2"}
+        df_patient = []
         
+        files = glob.glob(os.path.join(path_plv, "*.pkl"))
+        patients = sorted(set([os.path.basename(f).split("_")[0] for f in files]))
+
+        for patient in patients:
+            stim_file = os.path.join(path_plv, f"{patient}_stim.pkl")
+            base_file = os.path.join(path_plv, f"{patient}_base.pkl")
+            
+            data = pd.DataFrame([])
+            data_stim = pd.read_pickle(stim_file)
+            data_base = pd.read_pickle(base_file)
+            
+            name = os.path.basename(stim_file).replace(".pkl", "")
+            parts = name.split("_")
+            time = parts[1]
+
+            data["Patient"] = patient
+            data["Time"] = time_map.get(time)
+            data["Group"] = "Responder" if patient in responders else "Non-responder"
+            data["Absolute Power"] = data["Average_BASE"]
+            # # # ------
+            df_base = df_base.copy()
+            df_base["Patient"] = patient
+            df_base["Condition"] = "Baseline"
+
+            long_list = []
+            for col in df_stim.columns:
+                if re.search(r"_(\d)$", col):
+                    time_idx = re.search(r"_(\d)$", col).group(1)
+                    time_label = time_map.get(time_idx, "unknown")
+                    tmp = pd.DataFrame({
+                        "PLV": df_stim[col],
+                        "FreqPair": df_stim["FreqPair"] if "FreqPair" in df_stim.columns else df_base.index,
+                        "Condition": time_label
+                    })
+                    long_list.append(tmp)
+
+            df_stim_long = pd.concat(long_list, ignore_index=True)
+            df_all = pd.concat([df_stim_long, df_base], ignore_index=True)
+            df_all["ResponseGroup"] = "Responder" if patient in responders else "Non-responder"
+            df_patient.append(df_all)
+
+        df = pd.concat(df_patient, ignore_index=True)
+
+        sns.set(style="whitegrid")
+        g = sns.catplot(data=df, x="FreqPair", y="Phase Locking Value",
+                        hue="Time", col="Group", kind='box',
+                        palette="Set3", linewidth=0.8, width=0.55,
+                        fliersize=3, sharey=True, col_order=["Responder", "Non-Responder"],
+                        height=6, aspect=1.3, legend=False)
+        g.set(ylim=(df["Average_ABS"][df["Average_ABS"] > 0].min()*0.8, None))

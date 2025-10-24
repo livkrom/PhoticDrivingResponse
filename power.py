@@ -18,7 +18,7 @@ matplotlib.use("TkAgg")
 class Power:
     """ Implements the full power calculation pipeline for EEG data. """
     passband: list
-    eeg: BaseRaw
+    raw: BaseRaw
 
     def run(self):
         """
@@ -26,6 +26,7 @@ class Power:
         
         :EEG: filtered EEG data, should contain trigger timing in annotations.
         """
+        self.eeg = self.raw.copy()
         df_stim = self._stimulation_power(self.eeg, save=False)
         epochs, df_epochs = self._epoch_power(df_stim, self.eeg, save=False, plot=False)
         fft_powers, fft_freq= self._fft_power(epochs, df_epochs, trim=0.0, padding = "zeros", plot=False)
@@ -118,6 +119,10 @@ class Power:
         blocks_baseline = []
         for rep, rep_epochs in df_epochs.groupby("rep"):
             start = rep_epochs["sample"].min() - 0.1*sfreq - tmax*sfreq
+
+            if start < 0:
+                print("Skipping first baseline due too not enough pre-stim data.")
+                continue
             block_baseline = {
                 "sample": int(start),
                 "previous": 0,
@@ -239,10 +244,19 @@ class Power:
                 # Convert to dB
                 fft_powers[rep][freq][ch_name] = (10*np.log10(np.mean(segments_powers, axis=0) * 1e12))
 
-                # Average across reps for baseline and
-                if rep == reps:
-                    fft_power_values = [fft_powers[r][freq][ch_name] for r in fft_powers.keys() if r!=0]
-                    fft_powers[0][freq][ch_name] = np.mean(fft_power_values, axis=0)
+        # Average across reps
+        for freq in freqs:
+            for ch_name in ch_names:
+                fft_power_values = []
+                for r in fft_powers:
+                    if r ==0:
+                        continue
+                    if freq in fft_powers[r] and isinstance(fft_powers[r][freq][ch_name], np.ndarray):
+                        fft_power_values.append(fft_powers[r][freq][ch_name])
+                    if len(fft_power_values) > 0:
+                        fft_powers[0][freq][ch_name] = np.mean(fft_power_values, axis=0)
+                    else:
+                        fft_powers[0][freq][ch_name] = np.full_like(fft_freq, np.nan)
 
         # Option to plot different PSD's averaged over all channels
         if plot:
@@ -251,14 +265,14 @@ class Power:
             for ax, f in zip(axes, freqs):
                 # Channel means
                 channel_means = np.array([fft_powers[0][f][ch] for ch in ch_names])
-                grand_mean = np.mean(channel_means, axis=0)
+                grand_mean = np.nanmean(channel_means, axis=0)
 
                 for ch_idx, ch_name in enumerate(ch_names):
                     ax.plot(fft_freq, channel_means[ch_idx], color="green", alpha=0.1, linewidth=1)
                 ax.plot([], [], color="green", alpha=0.5, label="solo channels")
                 ax.plot(fft_freq, grand_mean, color="black", linestyle="-", linewidth=1.1, label="overall mean")
                 ax.set_title(f"{f:.1f} Hz")
-                ax.set_xlim(0, 50)
+                ax.set_xlim(0, upper_lim)
                 ax.set_xlabel("Frequency (Hz)")
                 ax.set_ylabel("Power (dB µV^2/Hz)")
                 ax.legend()
@@ -363,7 +377,7 @@ class Power:
                     axes[i, h].set_title(f"{freq} Hz, h={freq * (h+1)}")
                     mne.viz.plot_topomap(powers_snr, pos_shifted, axes=axes[i, h],
                                          show=False, outlines="head", sensors=True,
-                                         ßvlim=(vmin, vmax), names=[f"{v:.1f}" for v in powers_snr])
+                                         vlim=(vmin, vmax), names=[f"{v:.1f}" for v in powers_snr])
                     for text in axes[i, h].texts:
                         text.set_fontsize(5)
 

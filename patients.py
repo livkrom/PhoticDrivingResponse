@@ -30,13 +30,13 @@ def parse_args()-> tuple[dict[str, str], argparse.Namespace]:
     trial_map = {
         "t0": "T0_T1_T2",
         "t1": "T0_T1",
-        "t2": "T0_T1"}
-    parser.add_argument("-tr", "--trial", choices = trial_map.keys(), default="t0", help = "Choose between t0, t1, t2")
+        "t2": "T0_T2"}
+    parser.add_argument("-tr", "--trial", choices = trial_map.keys(), default="t2", help = "Choose between t0, t1, t2")
 
     time_map = {
         "t0": ["t0", "t1", "t2"],
         "t1": ["t0", "t1"],
-        "t2": ["t0", "t1"]
+        "t2": ["t0", "t2"]
     }
     parser.add_argument("-t", "--time", choices = list(time_map.keys()), default="all",
                         help = "Choose point in time: t0, t1, t2 or all")
@@ -141,9 +141,8 @@ def save_pickle_results(data, pt_file, folder_name, complete, feat: str = "power
     path = Path(f"./{folder_name}")
     path.mkdir(parents=True, exist_ok=True)
 
-    if isinstance(data, (tuple, list)) and len(data) == 2 and feat == "plv":
-        endings = ["stim", "base"]
-        for item, ending in zip(data, endings):
+    if isinstance(data, dict) and feat == "plv":
+        for ending, item in data.items():
             single_path = path / f"{pt_file.stem}_{feat}_{ending}.pkl"
             item.to_pickle(single_path)
     else:
@@ -156,15 +155,15 @@ def save_pickle_results(data, pt_file, folder_name, complete, feat: str = "power
 
     return
 
-def filter_files(files: List[Path], time_map, args):
+def filter_files(folder_power: str, time_map, args):
     """
     Keep only files for patients that have all required timepoints; 
     moves incomplete sets to a trash folder.
 
     Parameters
     ----------
-    :files: List[Path]
-        List containing all Path objects for successfully processed files.
+    :folder_power: str
+        Name of the folder containing the power results.
     :trial_map: dict
         Dictionary mapping trial arguments to folder names.
     :args: argparse
@@ -175,6 +174,13 @@ def filter_files(files: List[Path], time_map, args):
         List containing patients with files for all required timepoints.  
     """
     print("Finding complete patientdatasets...")
+
+    path_power = Path(f"./{folder_power}")
+    files = list(path_power.glob("*_power.pkl"))
+    if not files:
+        print(f"No power files found in {path_power.resolve()}")
+        return []
+    
     if args.time == "all":
         args.time = time_map[args.trial]
     timepoints = args.time if isinstance(args.time, list) else [args.time]

@@ -27,16 +27,16 @@ parser = argparse.ArgumentParser()
 trial_map = {
     "t0": "T0_T1_T2",
     "t1": "T0_T1",
-    "t2": "T0_T1"}
-parser.add_argument("-tr", "--trial", choices = trial_map.keys(), default="t0",
+    "t2": "T0_T2"}
+parser.add_argument("-tr", "--trial", choices = trial_map.keys(), default="t2",
 help = "Choose trial map: t0, t1 or t2")
 
 time_map = {
     "t0": ["t0", "t1", "t2"],
     "t1": ["t0", "t1"],
-    "t2": ["t0", "t1"]
+    "t2": ["t0", "t2"]
 }
-parser.add_argument("-t", "--time", choices = time_map.keys(), default="t2",
+parser.add_argument("-t", "--time", choices = time_map.keys(), default="t0",
                     help = "Choose point in time: t0, t1 or t2")
 
 while True:
@@ -44,7 +44,6 @@ while True:
     if args.time not in time_map[args.trial]:
         print(f"Error: timepoint {args.time} is not in trial {args.trial}")
         print("Please choose again.")
-        continue
     break
 
 data_map = {
@@ -53,7 +52,7 @@ data_map = {
     "t2": "3"
 }
 
-pt = "VEP38_" + data_map[args.time] + ".cnt"
+pt = "VEP56_" + data_map[args.time] + ".cnt"
 src = Path('/Volumes/Docs/Bruikbare Data') / trial_map[args.trial] / args.time / pt
 passband = [0.5, 100]
 
@@ -67,17 +66,17 @@ passband = [0.5, 100]
 # raw.plot(scalings = "auto", title="Non-Filtered EEG data", show=True, block=False)
 
 # Testing power functions
-# eeg = eeg(src, passband, notch = 50, occi=False, plot=False)
-# df = Power._stimulation_power(eeg, save=False)
-# epochs, df_epochs = Power._epoch_power(df, eeg, save=False, plot=False)
-# fft_powers, fft_freqs = Power._fft_power(epochs, df_epochs, trim=0.0, padding= "zeros", upper_lim = 40, plot=False)
-# powers = Power._snr(epochs, fft_powers, fft_freqs, save=True, plot=True, harms=4, upper_lim=40, montage="standard_1020")
+eeg = eeg(src, passband, notch = 50, occi=True, plot=False)
+df = Power._stimulation_power(eeg, save=False)
+epochs, df_epochs = Power._epoch_power(df, eeg, save=True, plot=False)
+fft_powers, fft_freqs = Power._fft_power(epochs, df_epochs, trim=0.0, padding= "zeros", upper_lim = 40, plot=True)
+powers = Power._snr(epochs, fft_powers, fft_freqs, save=True, plot=True, harms=4, upper_lim=40, montage="standard_1020")
 
 # Testing phase functions
-raw = eeg(src, passband, notch = 50, plot=False)
-df = Phase._stimulation_phase(raw, save=False, base=False)
-epochs =  Phase._epoch_phase(df, raw)
-phases = Phase._fft_phase(epochs, occi=True, plot = False, save=True)
+# raw = eeg(src, passband, notch = 50, plot=False)
+# df = Phase._stimulation_phase(raw, save=False, base=False)
+# epochs =  Phase._epoch_phase(df, raw)
+# phases = Phase._fft_phase(epochs, occi=True, plot = False, save=True)
 
 # Baseline phase functions
 # raw = eeg(src, passband, notch = 50, occi=True, plot=False)
