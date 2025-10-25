@@ -66,11 +66,11 @@ passband = [0.5, 100]
 # raw.plot(scalings = "auto", title="Non-Filtered EEG data", show=True, block=False)
 
 # Testing power functions
-eeg = eeg(src, passband, notch = 50, occi=True, plot=False)
-df = Power._stimulation_power(eeg, save=False)
-epochs, df_epochs = Power._epoch_power(df, eeg, save=True, plot=False)
-fft_powers, fft_freqs = Power._fft_power(epochs, df_epochs, trim=0.0, padding= "zeros", upper_lim = 40, plot=True)
-powers = Power._snr(epochs, fft_powers, fft_freqs, save=True, plot=True, harms=4, upper_lim=40, montage="standard_1020")
+# eeg = eeg(src, passband, notch = 50, occi=True, plot=False)
+# df = Power._stimulation_power(eeg, save=False)
+# epochs, df_epochs = Power._epoch_power(df, eeg, save=True, plot=False)
+# fft_powers, fft_freqs = Power._fft_power(epochs, df_epochs, trim=0.0, padding= "zeros", upper_lim = 40, plot=True)
+# powers = Power._snr(epochs, fft_powers, fft_freqs, save=True, plot=True, harms=4, upper_lim=40, montage="standard_1020")
 
 # Testing phase functions
 # raw = eeg(src, passband, notch = 50, plot=False)
@@ -79,10 +79,10 @@ powers = Power._snr(epochs, fft_powers, fft_freqs, save=True, plot=True, harms=4
 # phases = Phase._fft_phase(epochs, occi=True, plot = False, save=True)
 
 # Baseline phase functions
-# raw = eeg(src, passband, notch = 50, occi=True, plot=False)
-# df, df_base = Phase._stimulation_phase(raw, save=False, base=False)
-# epochs_baseline =  Phase._epoch_phase(df_base, raw)
-# phases_baseline = Phase._fft_phase(epochs_baseline, occi=True, plot=False, save=False)
+raw = eeg(src, passband, notch = 50, occi=True, plot=False)
+df, df_base = Phase._stimulation_phase(raw, save=True, base=True)
+epochs_baseline =  Phase._epoch_phase(df_base, raw)
+phases_baseline = Phase._fft_phase(epochs_baseline, plot=True, save=True)
 
 
 ## Filtering files function

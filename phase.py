@@ -198,10 +198,11 @@ class Phase:
         phases = {}
 
         for (f,h) in filtered_epochs.index:
-            ch_names = ep.info["ch_names"]
-            sfreq = ep.info["sfreq"]
-            data = ep.get_data()
-            _, _, n_times = ep.get_data().shape
+            epoch = filtered_epochs[(f,h)]
+            ch_names = epoch.info["ch_names"]
+            sfreq = epoch.info["sfreq"]
+            data = epoch.get_data()
+            _, _, n_times = epoch.get_data().shape
 
             window = np.hanning(n_times)
             data_windowed = data * window[np.newaxis, np.newaxis, :]
@@ -266,22 +267,23 @@ class Phase:
             plt.subplots_adjust(top=0.85, bottom=0.10, left=0.08, right=0.92, hspace=0.5, wspace=0.2)
             plt.show()
 
+        rows = []
+        for (f,h), ch_dict in phases.items():
+            row = {'Frequency': f, 'Harmonic': h}
+
+            for ch_idx, ch_name in enumerate(ch_dict["ch_names"]):
+                row[f"{ch_name}_plv"] = ch_dict["plv"][ch_name]
+                row[f"{ch_name}_angles"] = np.degrees(np.angle(np.mean(np.exp(1j * ch_dict["angles"][:, ch_idx]))))
+
+            row["mean_plv"] = ch_dict["mean_plv"]
+            row["mean_phase"] = np.degrees(ch_dict["mean_phase"])
+            rows.append(row)
+
+        df = pd.DataFrame(rows)
+        df = df.sort_values(['Frequency','Harmonic'])
+
         if save:
-            rows = []
-            for (f,h), ch_dict in phases.items():
-                row = {'Frequency': f, 'Harmonic': h}
-
-                for ch_idx, ch_name in enumerate(ch_dict["ch_names"]):
-                    row[f"{ch_name}_plv"] = ch_dict["plv"][ch_name]
-                    row[f"{ch_name}_angles"] = np.degrees(np.angle(np.mean(np.exp(1j * ch_dict["angles"][:, ch_idx]))))
-
-                row["mean_plv"] = ch_dict["mean_plv"]
-                row["mean_phase"] = np.degrees(ch_dict["mean_phase"])
-                rows.append(row)
-
-            df = pd.DataFrame(rows)
-            df = df.sort_values(['Frequency','Harmonic'])
             df.to_csv('phases.csv', index=False)
             print("Saved phases-dataframe to phases.csv")
 
-        return phases
+        return df

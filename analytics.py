@@ -161,7 +161,7 @@ def stats_power(responder_IDs: list, folder_power: str, paired: bool = True, sav
 
             df_patient.append(data)
         df = pd.concat(df_patient, ignore_index=True)
-        df["FreqPair"] = df["Harmonic"].astype(str) + " Hz (S: " + df["Frequency"].astype(str) +")"
+        df["FreqPair"] = df["Harmonic"].astype(str) + r"$\mathregular{ Hz_{S" + df["Frequency"].astype(str) + "}}$"
 
         time_order = ["t0", "t1", "t2", "base"]
         full_palette = dict(zip(time_order, sns.color_palette("Set3", len(time_order))))
@@ -176,12 +176,35 @@ def stats_power(responder_IDs: list, folder_power: str, paired: bool = True, sav
                         height=6, aspect=1.3, legend=False)
         g.set(ylim=(df["Absolute Power"][df["Absolute Power"] > 0].min()*0.8, None))
 
+        for ax in g.axes.flatten():
+            xticks = ax.get_xticks()
+            xticklabels = [tick.get_text() for tick in ax.get_xticklabels()]
+            stim_freqs = []
+
+            for label in xticklabels:
+                match = re.search(r"S(\d+)", label)
+                stim_freqs.append(match.group(1) if match else "unknown")
+
+            change_indices = [i for i in range(1, len(stim_freqs)) if stim_freqs[i] != stim_freqs[i-1]]
+            change_indices = [0] + change_indices + [len(stim_freqs)]
+
+            for i in range(len(change_indices) - 1):
+                start = xticks[change_indices[i]]
+                end = xticks[change_indices[i+1] - 1]
+                center = (start + end) / 2
+                stim_label = f"S: {stim_freqs[change_indices[i]]} Hz"
+                ax.text(center, 1.05, stim_label, ha='center', va='bottom',
+                        fontsize=10, transform=ax.get_xaxis_transform())
+                if i < len(change_indices) - 2:
+                    ax.axvline(x=end + 0.5, color='gray', linestyle='--', alpha=0.3)
+
         g.set_axis_labels("Analyzed Frequency (Hz) - Stimulation Frequency (Hz)", "Absolute Power (dB µV^2)")
         for ax in g.axes.flatten():
             ax.grid(axis='y', linestyle='--', alpha=0.4)
             ax.tick_params(axis='x', rotation=45)
-
         group_counts = df.groupby("Group")["Patient"].nunique()
+
+        # Manually set titles per facet
         for ax, group in zip(g.axes.flatten(), g.col_names):
             count = group_counts.get(group, 0)
             ax.set_title(f"{group} (n = {count})", fontsize=13)
@@ -225,52 +248,88 @@ def stats_plv(responder_IDs: list, folder_plv: str, paired: bool = True, save: b
         df_patient = []
         
         files = glob.glob(os.path.join(path_plv, "*.pkl"))
-        patients = sorted(set([os.path.basename(f).split("_")[0] for f in files]))
 
-        for patient in patients:
-            stim_file = os.path.join(path_plv, f"{patient}_stim.pkl")
-            base_file = os.path.join(path_plv, f"{patient}_base.pkl")
-            
-            data = pd.DataFrame([])
-            data_stim = pd.read_pickle(stim_file)
-            data_base = pd.read_pickle(base_file)
-            
-            name = os.path.basename(stim_file).replace(".pkl", "")
+        for file in files:
+            name = os.path.basename(file).replace(".pkl", "")
             parts = name.split("_")
+            patient = parts[0]
             time = parts[1]
 
-            data["Patient"] = patient
-            data["Time"] = time_map.get(time)
-            data["Group"] = "Responder" if patient in responders else "Non-responder"
-            data["Absolute Power"] = data["Average_BASE"]
-            # # # ------
-            df_base = df_base.copy()
-            df_base["Patient"] = patient
-            df_base["Condition"] = "Baseline"
+            stim_file = os.path.join(path_plv, f"{patient}_{time}_plv_stim.pkl")
+            base_file = os.path.join(path_plv, f"{patient}_{time}_plv_base.pkl")
+            
+            data_stim = pd.read_pickle(stim_file)
+            data_base = pd.read_pickle(base_file)
 
-            long_list = []
-            for col in df_stim.columns:
-                if re.search(r"_(\d)$", col):
-                    time_idx = re.search(r"_(\d)$", col).group(1)
-                    time_label = time_map.get(time_idx, "unknown")
-                    tmp = pd.DataFrame({
-                        "PLV": df_stim[col],
-                        "FreqPair": df_stim["FreqPair"] if "FreqPair" in df_stim.columns else df_base.index,
-                        "Condition": time_label
-                    })
-                    long_list.append(tmp)
-
-            df_stim_long = pd.concat(long_list, ignore_index=True)
-            df_all = pd.concat([df_stim_long, df_base], ignore_index=True)
-            df_all["ResponseGroup"] = "Responder" if patient in responders else "Non-responder"
-            df_patient.append(df_all)
-
+            for df, condition in [(data_stim, time_map.get(time)), (data_base, "base")]:
+                df = df.copy()
+                df["Patient"] = patient
+                df["Time"] = condition
+                df["Group"] = "Responder" if patient in responders else "Non-responder"
+                df["PLV"] = df["mean_plv"]
+                df["FreqPair"] = df["Harmonic"].astype(str) + r"$\mathregular{ Hz_{"+ "S" + df["Frequency"].astype(str)+"}}$"
+                df["StimFreq"] = df["Frequency"].astype(str) + " Hz"
+                df_patient.append(df)
+            
         df = pd.concat(df_patient, ignore_index=True)
 
+        time_order = ["t0", "t1", "t2", "base"]
+        full_palette = dict(zip(time_order, sns.color_palette("Set3", len(time_order))))
+        present_times = [t for t in time_order if t in df["Time"].unique()]
+        filtered_palette = {k: full_palette[k] for k in present_times}
+
         sns.set(style="whitegrid")
-        g = sns.catplot(data=df, x="FreqPair", y="Phase Locking Value",
-                        hue="Time", col="Group", kind='box',
-                        palette="Set3", linewidth=0.8, width=0.55,
-                        fliersize=3, sharey=True, col_order=["Responder", "Non-Responder"],
+        g = sns.catplot(data=df, x="FreqPair", y="PLV",
+                        hue="Time", col="Group", kind='box', hue_order=present_times,
+                        palette=filtered_palette, linewidth=0.8, width=0.55,
+                        fliersize=3, sharey=True, col_order=["Responder", "Non-responder"],
                         height=6, aspect=1.3, legend=False)
-        g.set(ylim=(df["Average_ABS"][df["Average_ABS"] > 0].min()*0.8, None))
+        
+        g.set_axis_labels("Analyzed Frequency (Hz) - Stimulation Frequency (Hz)", "Phase Locking Value (PLV)")
+        g.set(ylim=(0,1))
+
+        for ax in g.axes.flatten():
+            xticks = ax.get_xticks()
+            xticklabels = [tick.get_text() for tick in ax.get_xticklabels()]
+            stim_freqs = []
+
+            for label in xticklabels:
+                match = re.search(r"S(\d+)", label)
+                stim_freqs.append(match.group(1) if match else "unknown")
+
+            change_indices = [i for i in range(1, len(stim_freqs)) if stim_freqs[i] != stim_freqs[i-1]]
+            change_indices = [0] + change_indices + [len(stim_freqs)]
+
+            for i in range(len(change_indices) - 1):
+                start = xticks[change_indices[i]]
+                end = xticks[change_indices[i+1] - 1]
+                center = (start + end) / 2
+                stim_label = f"S: {stim_freqs[change_indices[i]]} Hz"
+                ax.text(center, 1.05, stim_label, ha='center', va='bottom',
+                        fontsize=10, transform=ax.get_xaxis_transform())
+                if i < len(change_indices) - 2:
+                    ax.axvline(x=end + 0.5, color='gray', linestyle='--', alpha=0.3)
+        
+        for ax in g.axes.flatten():
+            ax.grid(axis='y', linestyle='--', alpha=0.4)
+            ax.tick_params(axis='x', rotation=45)
+
+        group_counts = df.groupby("Group")["Patient"].nunique()
+        for ax, group in zip(g.axes.flatten(), g.col_names):
+            count = group_counts.get(group, 0)
+            ax.set_title(f"{group} (n = {count})", fontsize=13)
+
+        handles = [Patch(facecolor=filtered_palette[t], label=t) for t in present_times]
+        for ax in g.axes.flatten():
+            ax.legend(
+                handles=handles, title="Condition", loc="upper right",
+                frameon=True, facecolor="white", edgecolor="gray", fontsize=9
+            ).get_frame().set_alpha(0.9)
+
+        g.fig.suptitle("PLV distributions by dose condition and response group", fontsize=15, y=1)
+        g.fig.subplots_adjust(top=0.90, right=0.97, wspace=0.15)
+        plt.show()
+        plt.tight_layout(pad=2)
+        
+        if save:
+            df.to_csv("PLV_Stats_All.csv", index=False)
