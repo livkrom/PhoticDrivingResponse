@@ -1,12 +1,13 @@
 """
 Module patients selects patientfiles, loads their EEG data and filters them.
 """
+import re
 import argparse
 from pathlib import Path
-from typing import List
 from collections import defaultdict
 import numpy as np
 import mne
+mne.set_log_level('error')
 from mne.io.base import BaseRaw
 
 def parse_args()-> tuple[dict[str, str], argparse.Namespace]:
@@ -106,19 +107,24 @@ def eeg(src, passband, notch = 50, occi: bool = False, plot: bool = False)-> Bas
 
     if occi:
         raw = raw.copy().pick(["O1", "O2", "Oz"])
+        threshold = 1e-6
+        channels_dropped = set([ch for ch in raw.ch_names if np.all(np.abs(raw.get_data(picks=ch))<threshold)])
+        if channels_dropped:
+            raw.drop_channels([ch for ch in channels_dropped if ch in raw.ch_names])
+            print(f"Dropped channels: {channels_dropped}")
     else:
         threshold = 1e-6
         channels_dropped = set(['EOG']+[ch for ch in raw.ch_names if np.all(np.abs(raw.get_data(picks=ch))<threshold)])
-        raw.drop_channels([ch for ch in channels_dropped if ch in raw.ch_names])
-        print(f"Dropped channels: {channels_dropped}")
+        if channels_dropped:
+            raw.drop_channels([ch for ch in channels_dropped if ch in raw.ch_names])
+            print(f"Dropped channels: {channels_dropped}")
 
     if plot:
         raw.plot(scalings = "auto", title="Filtered EEG data", show=True, block=True)
 
     return raw
 
-def save_pickle_results(data, pt_file, folder_name, complete, feat: str = "power",
-                        verbose:bool =False):
+def save_pickle_results(data, pt_file, folder_name, feat: str = "power"):
     """
     Saves dataframes (singles or multiple) as pickle files in designated pathway.
 
@@ -129,9 +135,7 @@ def save_pickle_results(data, pt_file, folder_name, complete, feat: str = "power
     :pt_file: str
         Dataframe containing powers at different frequencies. 
     :folder_name:
-        Name for the folder to save the pickle files.
-    :complete: list
-        List containing files with completed power analysis. 
+        Name for the folder to save the pickle files. 
     :feat: str
         Type of feature that is being saved. Either "power" or "plv". 
     :verbose: bool, optional
@@ -149,16 +153,12 @@ def save_pickle_results(data, pt_file, folder_name, complete, feat: str = "power
         single_path = path / f"{pt_file.stem}_{feat}.pkl"
         data.to_pickle(single_path)
 
-    complete.append(pt_file)
-    if verbose:
-        print(f"Saved {feat}s to {single_path}")
-
     return
 
-def filter_files(folder_power: str, time_map, args):
+def filter_files(folder: str, time_map: dict, args, feat: str = "power"):
     """
-    Keep only files for patients that have all required timepoints; 
-    moves incomplete sets to a trash folder.
+    Filters patients with complete data across required timepoints for either power or PLV results.
+    Moves incomplete patient files to ./incomplete_files.
 
     Parameters
     ----------
@@ -168,43 +168,66 @@ def filter_files(folder_power: str, time_map, args):
         Dictionary mapping trial arguments to folder names.
     :args: argparse
         Parsed command-line arguments, must contain `trial` and `time`.
+    :feat: str
+        Feature type: "power" or "plv
 
     Returns 
     -------
-        List containing patients with files for all required timepoints.  
+        List of patient IDs with complete data across required timepoints.  
     """
-    print("Finding complete patientdatasets...")
+    print(f"Finding complete patient datasets in {folder}...")
 
-    path_power = Path(f"./{folder_power}")
-    files = list(path_power.glob("*_power.pkl"))
+    path = Path(f"./{folder}")
+    if feat == "power":
+        files = list(path.glob("*_power.pkl"))
+        file_pattern = r"(VEP\d+)_([123])_power"
+        required_suffixes = ["_power.pkl"]
+    elif feat == "plv":
+        files = list(path.glob("*_plv_stim.pkl"))
+        file_pattern = r"(VEP\d+)_([123])_plv_stim"
+        required_suffixes = ["_plv_stim.pkl", "_plv_base.pkl"]
+    else:
+        raise ValueError("Feature type must be 'power' or 'plv'")
+
     if not files:
-        print(f"No power files found in {path_power.resolve()}")
+        print(f"No power files found in {path.resolve()}")
         return []
-    
+
     if args.time == "all":
         args.time = time_map[args.trial]
     timepoints = args.time if isinstance(args.time, list) else [args.time]
 
     timepoint_mapping = {"1": "t0", "2": "t1", "3": "t2"}
     patient_times = defaultdict(set)
+
     for f in files:
         file = f.stem
-        if "_" not in file:
+        match = re.match(file_pattern, file)
+        if not match:
             print(f"Unexpected filename: {file}")
             continue
-        patient_id, rest = file.split("_", 1)
-        num = rest.split("_")[0]
-        timepoint = timepoint_mapping.get(num)
+        patient_id, time_num = match.groups()
+        timepoint = timepoint_mapping.get(time_num)
         if timepoint:
-            patient_times[patient_id].add(timepoint)
+            if feat == "power":
+                patient_times[patient_id].add(timepoint)
+            if feat == "plv":
+                stim_file = path / f"{patient_id}_{time_num}_plv_stim.pkl"
+                base_file = path / f"{patient_id}_{time_num}_plv_base.pkl"
+                if stim_file.exists() and base_file.exists():
+                    patient_times[patient_id].add(timepoint)
 
     complete = {pid for pid, tps in patient_times.items() if set(timepoints).issubset(tps)}
-    files_complete = [f for f in files if f.stem.split("_", 1)[0] in complete]
-
-    to_remove = set(files) - set(files_complete)
+    
+    all_files = []
+    for suffix in required_suffixes:
+        all_files.extend(path.glob(f"*{suffix}"))
+    
+    to_remove = [f for f in all_files if f.stem.split("_", 1)[0] not in complete]
+    
     trash_folder = Path("./incomplete_files")
     trash_folder.mkdir(parents=True, exist_ok=True)
     for f in to_remove:
         f.rename(trash_folder / f.name)
 
-    return complete
+    return sorted(complete)
