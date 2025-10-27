@@ -12,7 +12,7 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 
-def metric(n: int, values_per_tp: list, paired: bool):
+def statistic(n: int, values_per_tp: list, paired: bool):
     """
     Chooses and runs the appropriate statistical test based on number of timepoints and pairing.
 
@@ -126,7 +126,7 @@ def stats_base_power(folder_power: str, paired: bool = True, save: bool = False)
 
         # Choosing and performing statistical test
         n = len(timepoints)
-        test, stat, p = metric(n, values_per_tp, paired = True)
+        test, stat, p = statistic(n, values_per_tp, paired = True)
         
         results.append({"Frequency": freq,
                 "Harmonic": harm,
@@ -141,7 +141,6 @@ def stats_base_power(folder_power: str, paired: bool = True, save: bool = False)
     # Optie om de dataframe op te slaan.
     if save:
         df_results.to_csv("base_stats.csv", sep=";", index=False)
-        print("Baseline statistics dataframe saved as base_stats.csv")
 
     return df_results
 
@@ -162,31 +161,72 @@ def stats_power(responder_id: list, folder_power: str, paired: bool = True, save
     :abs: bool
         Option to either use absolute or relative values. 
     """
+    # Finding files
+    path_power = Path(f"./{folder_power}")
+    responders = [f"VEP{idx.zfill(2)}" if not idx.startswith("VEP") else idx for idx in responder_id]
+    time_map = {"1": "t0", "2": "t1", "3": "t2"}
+    df_patient = []
+
+    # Combining files
+    files = glob.glob(os.path.join(path_power, "*.pkl"))
+    for file in files:
+        name = os.path.basename(file).replace(".pkl", "")
+        parts = name.split("_")
+        patient = parts[0]
+        time = parts[1]
+
+        data = pd.read_pickle(file)
+        data["Patient"] = patient
+        data["Time"] = time_map.get(time)
+        data["Group"] = "Responder" if patient in responders else "Non-responder"
+        data["Absolute Power"] = data["Average_PWR"] 
+        # You can change the right side of above line to "Average_PWR", "Average_BASE" or "Average_SNR", depending on what you want to see.
+        df_patient.append(data)
+    df = pd.concat(df_patient, ignore_index=True)
+    df["FreqPairPlot"] = df["Harmonic"].astype(str) + r"$\mathregular{ Hz_{S" + df["Frequency"].astype(str) + "}}$"
+    df["FreqPairCSV"] = df["Harmonic"].astype(str) + " Hz (S: " + df["Frequency"].astype(str) + ")"
+
+    results = []
+    timepoints = [tp for tp in sorted(df["Time"].unique()) if tp != "base"]
+    freq_pairs = sorted(df["FreqPairCSV"].unique())
+    groups = df["Group"].unique()
+    metrics = ["Average_PWR", "Average_BASE", "Average_SNR"]
+
+    for freq in freq_pairs:
+        df_freq = df[df["FreqPairCSV"] == freq]
+
+        for metric in metrics:
+
+            # Within group comparison, for all groups
+            for group in groups:
+                df_group = df_freq[df_freq["Group"] == group]
+                values_per_tp = []
+                
+                for tp in timepoints:
+                    values = df_group[df_group["Time"] == tp][metric].values
+                    values_per_tp.append(values)
+                
+                test, stat, p = statistic(len(timepoints), values_per_tp, paired)
+                results.append({ "FreqPair": freq, "Paired": paired, "Metric": metric,
+                        "Comparison": f"{group}: {' vs '.join(timepoints)}",
+                        "Test": test, "Statistic": stat, "p_value": p})
+                
+            # Between-group comparison, for all timepoints
+            for tp in timepoints:
+                values_per_group = []
+
+                for group in groups: 
+                    values = df_freq[(df_freq["Group"] == group) & (df_freq["Time"] == tp)][metric].values
+                    values_per_group.append(values)
+                
+                test, stat, p = statistic(len(groups), values_per_group, paired=False)
+                results.append({ "FreqPair": freq, "Paired": False, "Metric": metric,
+                    "Comparison": " vs ".join(groups) + f" at {tp}",
+                    "Test": test, "Statistic": stat, "p_value": p})
+
+        df_stats = pd.DataFrame(results)
 
     if plot:
-        path_power = Path(f"./{folder_power}")
-        responders = [f"VEP{idx.zfill(2)}" if not idx.startswith("VEP") else idx for idx in responder_id]
-        time_map = {"1": "t0", "2": "t1", "3": "t2"}
-        df_patient = []
-
-        files = glob.glob(os.path.join(path_power, "*.pkl"))
-        for file in files:
-            name = os.path.basename(file).replace(".pkl", "")
-            parts = name.split("_")
-            patient = parts[0]
-            time = parts[1]
-
-            data = pd.read_pickle(file)
-            data["Patient"] = patient
-            data["Time"] = time_map.get(time)
-            data["Group"] = "Responder" if patient in responders else "Non-responder"
-            data["Absolute Power"] = data["Average_PWR"] 
-            #You can change the right side of above line to "Average_PWR", "Average_BASE" or "Average_SNR", depending on what you want to see.
-            df_patient.append(data)
-        df = pd.concat(df_patient, ignore_index=True)
-        df["FreqPairPlot"] = df["Harmonic"].astype(str) + r"$\mathregular{ Hz_{S" + df["Frequency"].astype(str) + "}}$"
-        df["FreqPairCSV"] = df["Harmonic"].astype(str) + " Hz (S: " + df["Frequency"].astype(str) + ")"
-
         time_order = ["t0", "t1", "t2", "base"]
         full_palette = dict(zip(time_order, sns.color_palette("Set3", len(time_order))))
         present_times = [t for t in time_order if t in df["Time"].unique()]
@@ -248,6 +288,7 @@ def stats_power(responder_id: list, folder_power: str, paired: bool = True, save
 
     if save:
         df.to_csv("Powers_Data_All.csv", index=True)
+        df_stats.to_csv("Powers_Stats_All.csv", index=True)
 
 def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bool = True, plot: bool = True):
     """
@@ -299,7 +340,7 @@ def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bo
             df_patient.append(df)
     df = pd.concat(df_patient, ignore_index=True)
 
-    # Statistics: timepoints
+    # Statistics
     results = []
     timepoints = [tp for tp in sorted(df["Time"].unique()) if tp != "base"]
     freq_pairs = sorted(df["FreqPairCSV"].unique())
@@ -317,7 +358,7 @@ def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bo
                 values = df_group[df_group["Time"] == tp]["PLV"].values
                 values_per_tp.append(values)
             
-            test, stat, p = metric(len(timepoints), values_per_tp, paired)
+            test, stat, p = statistic(len(timepoints), values_per_tp, paired)
             results.append({ "FreqPair": freq, "Paired": paired,
                     "Comparison": f"{group}: {' vs '.join(timepoints)}",
                     "Test": test, "Statistic": stat, "p_value": p})
@@ -330,7 +371,7 @@ def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bo
                 values = df_freq[(df_freq["Group"] == group) & (df_freq["Time"] == tp)]["PLV"].values
                 values_per_group.append(values)
             
-            test, stat, p = metric(len(groups), values_per_group, paired=False)
+            test, stat, p = statistic(len(groups), values_per_group, paired=False)
             results.append({ "FreqPair": freq, "Paired": False,
                 "Comparison": " vs ".join(groups) + f" at {tp}",
                 "Test": test, "Statistic": stat, "p_value": p})
