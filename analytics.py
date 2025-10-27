@@ -12,6 +12,52 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 
+def metric(n: int, values_per_tp: list, paired: bool):
+    """
+    Chooses and runs the appropriate statistical test based on number of timepoints and pairing.
+
+    Parameters
+    ----------
+    :n: int
+        Amount of groups to compare.
+    :values_per_tp: list of np.array
+        Each array contains values for all patients for one timepoint. 
+    :paired: bool
+        Whether the data is paired (within-subject).
+
+    Returns
+    -------
+    :test_name: str
+        Name of the statistical test used.
+    :stat: float
+        Test statistic.
+    :p: float
+        p-value.
+    """
+    if any(len(v) < 3 for v in values_per_tp):
+        return "Insufficient data", None, None
+
+    if paired:
+        if n == 2:
+            stat, p = wilcoxon(*values_per_tp) # pylint: disable=no-value-for-parameter
+            test = "Wilcoxon signed-rank"
+        elif n > 2:
+            stat, p = friedmanchisquare(*values_per_tp)
+            test = "Friedman chi-squared"
+        else:
+            print(f"Can't compare only one group.")
+            return None, None, None
+    else:
+        if n == 2:
+            stat, p = mannwhitneyu(*values_per_tp) # pylint: disable=no-value-for-parameter
+            test = "Mann-Whitney U"
+        elif n > 2:
+            stat, p = kruskal(*values_per_tp)
+            test = "Kruskal Wallis"
+        else:
+            print(f"Can't compare only one group.")
+            return None, None, None
+    return test, stat, p
 
 def stats_base_power(folder_power: str, paired: bool = True, save: bool = False):
     """
@@ -34,7 +80,6 @@ def stats_base_power(folder_power: str, paired: bool = True, save: bool = False)
     baselines = {}
     timepoints = set()
 
-    # Averaging over baselines
     for file in files:
         match = re.match(r"VEP(\d+)_(\d+)_power.pkl", file.name)
         if not match:
@@ -45,8 +90,7 @@ def stats_base_power(folder_power: str, paired: bool = True, save: bool = False)
         timepoints.add(timepoint)
 
         df = pd.read_pickle(file)
-        channels = [c for c in df.columns if c.endswith("_BASE")and not c.startswith("Average")]
-        df['Baseline_avg'] = df[channels].mean(axis=1)
+        df['Baseline_avg'] = df["Average_BASE"]
         df = df[["Frequency", "Harmonic", "Baseline_avg"]].copy()
 
         if patient not in baselines:
@@ -81,29 +125,9 @@ def stats_base_power(folder_power: str, paired: bool = True, save: bool = False)
             values_per_tp.append(np.array(values))
 
         # Choosing and performing statistical test
-        test, stat, p = None, None, None
         n = len(timepoints)
-        if paired:
-            if n == 2:
-                stat, p = wilcoxon(*values_per_tp)
-                test = "Wilcoxon signed-rank"
-            elif n > 2:
-                stat, p = friedmanchisquare(*values_per_tp)
-                test = "Friedman chi-squared"
-            else:
-                print(f"Can't compare only one baseline, error in {tp}.")
-                continue
-        else:
-            if n == 2:
-                stat, p = mannwhitneyu(*values_per_tp)
-                test = "Mann-Whitney U"
-            elif n > 2:
-                stat, p = kruskal(*values_per_tp)
-                test = "Kruskal Wallis"
-            else:
-                print(f"Can't compare only one baseline, error in {tp}.")
-                continue
-
+        test, stat, p = metric(n, values_per_tp, paired = True)
+        
         results.append({"Frequency": freq,
                 "Harmonic": harm,
                 "Test": test,
@@ -121,7 +145,7 @@ def stats_base_power(folder_power: str, paired: bool = True, save: bool = False)
 
     return df_results
 
-def stats_power(responder_IDs: list, folder_power: str, paired: bool = True, save: bool = False, plot: bool = True):
+def stats_power(responder_id: list, folder_power: str, paired: bool = True, save: bool = False, plot: bool = True):
     """
     This code checks if there is a statistical difference between the different timepoints.
 
@@ -141,7 +165,7 @@ def stats_power(responder_IDs: list, folder_power: str, paired: bool = True, sav
 
     if plot:
         path_power = Path(f"./{folder_power}")
-        responders = [f"VEP{idx.zfill(2)}" if not idx.startswith("VEP") else idx for idx in responder_IDs]
+        responders = [f"VEP{idx.zfill(2)}" if not idx.startswith("VEP") else idx for idx in responder_id]
         time_map = {"1": "t0", "2": "t1", "3": "t2"}
         df_patient = []
 
@@ -153,15 +177,15 @@ def stats_power(responder_IDs: list, folder_power: str, paired: bool = True, sav
             time = parts[1]
 
             data = pd.read_pickle(file)
-
             data["Patient"] = patient
             data["Time"] = time_map.get(time)
             data["Group"] = "Responder" if patient in responders else "Non-responder"
-            data["Absolute Power"] = data["Average_SNR"]
-
+            data["Absolute Power"] = data["Average_PWR"] 
+            #You can change the right side of above line to "Average_PWR", "Average_BASE" or "Average_SNR", depending on what you want to see.
             df_patient.append(data)
         df = pd.concat(df_patient, ignore_index=True)
-        df["FreqPair"] = df["Harmonic"].astype(str) + r"$\mathregular{ Hz_{S" + df["Frequency"].astype(str) + "}}$"
+        df["FreqPairPlot"] = df["Harmonic"].astype(str) + r"$\mathregular{ Hz_{S" + df["Frequency"].astype(str) + "}}$"
+        df["FreqPairCSV"] = df["Harmonic"].astype(str) + " Hz (S: " + df["Frequency"].astype(str) + ")"
 
         time_order = ["t0", "t1", "t2", "base"]
         full_palette = dict(zip(time_order, sns.color_palette("Set3", len(time_order))))
@@ -169,13 +193,15 @@ def stats_power(responder_IDs: list, folder_power: str, paired: bool = True, sav
         filtered_palette = {k: full_palette[k] for k in present_times}
 
         sns.set(style="whitegrid")
-        g = sns.catplot(data=df, x="FreqPair", y="Absolute Power",
+        g = sns.catplot(data=df, x="FreqPairPlot", y="Absolute Power",
                         hue="Time", hue_order=present_times, col="Group", kind='box',
                         palette=filtered_palette, linewidth=0.8, width=0.55,
                         fliersize=3, sharey=True, col_order=["Responder", "Non-responder"],
                         height=6, aspect=1.3, legend=False)
-        #g.set(ylim=(df["Absolute Power"][df["Absolute Power"] > 0].min()*0.8, None))
-        g.set(ylim=(-10,None))
+        
+        g.set(ylim=(df["Absolute Power"][df["Absolute Power"] > 0].min()*0.8, None))
+        #g.set(ylim=(-10,None)) # Use this one for SNR
+        
         for ax in g.axes.flatten():
             xticks = ax.get_xticks()
             xticklabels = [tick.get_text() for tick in ax.get_xticklabels()]
@@ -221,9 +247,9 @@ def stats_power(responder_IDs: list, folder_power: str, paired: bool = True, sav
         plt.show()
 
     if save:
-        df.to_csv("Powers_Abs_All.csv", index=True)
+        df.to_csv("Powers_Data_All.csv", index=True)
 
-def stats_plv(responder_ids: list, folder_plv: str, paired: bool = True, save: bool = True, plot: bool = True):
+def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bool = True, plot: bool = True):
     """
     This code checks if there is a statistical difference between the different timepoints.
 
@@ -240,46 +266,85 @@ def stats_plv(responder_ids: list, folder_plv: str, paired: bool = True, save: b
     :abs: bool
         Option to either use absolute or relative values. 
     """
+    # Finding files
+    path_plv = Path(f"./{folder_plv}")
+    responders = [f"VEP{idx.zfill(2)}" if not idx.startswith("VEP") else idx for idx in responder_id]
+    time_map = {"1": "t0", "2": "t1", "3": "t2"}
+    df_patient = []
+
+    files = glob.glob(os.path.join(path_plv, "*.pkl"))
+
+    # Combining files
+    for file in files:
+        name = os.path.basename(file).replace(".pkl", "")
+        parts = name.split("_")
+        patient = parts[0]
+        time = parts[1]
+
+        stim_file = os.path.join(path_plv, f"{patient}_{time}_plv_stim.pkl")
+        base_file = os.path.join(path_plv, f"{patient}_{time}_plv_base.pkl")
+
+        data_stim = pd.read_pickle(stim_file)
+        data_base = pd.read_pickle(base_file)
+
+        for df, condition in [(data_stim, time_map.get(time)), (data_base, "base")]:
+            df = df.copy()
+            df["Patient"] = patient
+            df["Time"] = condition
+            df["Group"] = "Responder" if patient in responders else "Non-responder"
+            df["PLV"] = df["mean_plv"]
+            df["FreqPairPlot"] = df["Harmonic"].astype(str) + r"$\mathregular{ Hz_{"+ "S" + df["Frequency"].astype(str)+"}}$"
+            df["FreqPairCSV"] = df["Harmonic"].astype(str) + " Hz (S: " + df["Frequency"].astype(str) + ")"
+            df["StimFreq"] = df["Frequency"].astype(str) + " Hz"
+            df_patient.append(df)
+    df = pd.concat(df_patient, ignore_index=True)
+
+    # Statistics: timepoints
+    results = []
+    timepoints = [tp for tp in sorted(df["Time"].unique()) if tp != "base"]
+    freq_pairs = sorted(df["FreqPairCSV"].unique())
+    groups = df["Group"].unique()
+   
+    for freq in freq_pairs:
+        df_freq = df[df["FreqPairCSV"] == freq]
+
+        # Within group comparison, for all groups
+        for group in groups:
+            df_group = df_freq[df_freq["Group"] == group]
+            values_per_tp = []
+            
+            for tp in timepoints:
+                values = df_group[df_group["Time"] == tp]["PLV"].values
+                values_per_tp.append(values)
+            
+            test, stat, p = metric(len(timepoints), values_per_tp, paired)
+            results.append({ "FreqPair": freq, "Paired": paired,
+                    "Comparison": f"{group}: {' vs '.join(timepoints)}",
+                    "Test": test, "Statistic": stat, "p_value": p})
+            
+        # Between-group comparison, for all timepoints
+        for tp in timepoints:
+            values_per_group = []
+
+            for group in groups: 
+                values = df_freq[(df_freq["Group"] == group) & (df_freq["Time"] == tp)]["PLV"].values
+                values_per_group.append(values)
+            
+            test, stat, p = metric(len(groups), values_per_group, paired=False)
+            results.append({ "FreqPair": freq, "Paired": False,
+                "Comparison": " vs ".join(groups) + f" at {tp}",
+                "Test": test, "Statistic": stat, "p_value": p})
+
+    df_stats = pd.DataFrame(results)
 
     if plot:
-        path_plv = Path(f"./{folder_plv}")
-        responders = [f"VEP{idx.zfill(2)}" if not idx.startswith("VEP") else idx for idx in responder_ids]
-        time_map = {"1": "t0", "2": "t1", "3": "t2"}
-        df_patient = []
-
-        files = glob.glob(os.path.join(path_plv, "*.pkl"))
-
-        for file in files:
-            name = os.path.basename(file).replace(".pkl", "")
-            parts = name.split("_")
-            patient = parts[0]
-            time = parts[1]
-
-            stim_file = os.path.join(path_plv, f"{patient}_{time}_plv_stim.pkl")
-            base_file = os.path.join(path_plv, f"{patient}_{time}_plv_base.pkl")
-
-            data_stim = pd.read_pickle(stim_file)
-            data_base = pd.read_pickle(base_file)
-
-            for df, condition in [(data_stim, time_map.get(time)), (data_base, "base")]:
-                df = df.copy()
-                df["Patient"] = patient
-                df["Time"] = condition
-                df["Group"] = "Responder" if patient in responders else "Non-responder"
-                df["PLV"] = df["mean_plv"]
-                df["FreqPair"] = df["Harmonic"].astype(str) + r"$\mathregular{ Hz_{"+ "S" + df["Frequency"].astype(str)+"}}$"
-                df["StimFreq"] = df["Frequency"].astype(str) + " Hz"
-                df_patient.append(df)
-
-        df = pd.concat(df_patient, ignore_index=True)
-
         time_order = ["t0", "t1", "t2", "base"]
         full_palette = dict(zip(time_order, sns.color_palette("Set3", len(time_order))))
         present_times = [t for t in time_order if t in df["Time"].unique()]
         filtered_palette = {k: full_palette[k] for k in present_times}
 
         sns.set(style="whitegrid")
-        g = sns.catplot(data=df, x="FreqPair", y="PLV",
+        g = sns.catplot(data=df, x="FreqPairPlot", y="PLV",
                         hue="Time", col="Group", kind='box', hue_order=present_times,
                         palette=filtered_palette, linewidth=0.8, width=0.55,
                         fliersize=3, sharey=True, col_order=["Responder", "Non-responder"],
@@ -331,5 +396,6 @@ def stats_plv(responder_ids: list, folder_plv: str, paired: bool = True, save: b
         plt.show()
         plt.tight_layout(pad=2)
 
-        if save:
-            df.to_csv("PLV_Stats_All.csv", index=False)
+    if save:
+        df.to_csv("PLV_Data_All.csv", index=False)
+        df_stats.to_csv("PLV_Stats.csv", index=False)

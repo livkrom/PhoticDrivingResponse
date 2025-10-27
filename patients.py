@@ -7,8 +7,8 @@ from pathlib import Path
 from collections import defaultdict
 import numpy as np
 import mne
-mne.set_log_level('error')
 from mne.io.base import BaseRaw
+mne.set_log_level('error')
 
 def parse_args()-> tuple[dict[str, str], argparse.Namespace]:
     """
@@ -218,13 +218,13 @@ def filter_files(folder: str, time_map: dict, args, feat: str = "power"):
                     patient_times[patient_id].add(timepoint)
 
     complete = {pid for pid, tps in patient_times.items() if set(timepoints).issubset(tps)}
-    
+
     all_files = []
     for suffix in required_suffixes:
         all_files.extend(path.glob(f"*{suffix}"))
-    
+
     to_remove = [f for f in all_files if f.stem.split("_", 1)[0] not in complete]
-    
+
     trash_folder = Path("./incomplete_files")
     trash_folder.mkdir(parents=True, exist_ok=True)
     for f in to_remove:

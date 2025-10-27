@@ -121,7 +121,7 @@ class Power:
             start = rep_epochs["sample"].min() - 0.1*sfreq - tmax*sfreq
 
             if start < 0:
-                print("Skipping first baseline due too not enough pre-stim data.")
+                print("-- skipping first baseline due to too little prestimulation data.")
                 continue
             block_baseline = {
                 "sample": int(start),
