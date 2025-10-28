@@ -287,8 +287,10 @@ def stats_power(responder_id: list, folder_power: str, paired: bool = True, save
         plt.show()
 
     if save:
-        df.to_csv("Powers_Data_All.csv", index=True)
-        df_stats.to_csv("Powers_Stats_All.csv", index=True)
+        df.to_csv("Powers_Data_All.csv", index=False)
+        df_stats.to_csv("Powers_Stats_All.csv", index=False)
+    
+    return df
 
 def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bool = True, plot: bool = True):
     """
@@ -359,7 +361,7 @@ def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bo
                 values_per_tp.append(values)
             
             test, stat, p = statistic(len(timepoints), values_per_tp, paired)
-            results.append({ "FreqPair": freq, "Paired": paired,
+            results.append({ "FreqPair": freq, "Paired": paired, "Metric": "PLV",
                     "Comparison": f"{group}: {' vs '.join(timepoints)}",
                     "Test": test, "Statistic": stat, "p_value": p})
             
@@ -440,3 +442,5 @@ def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bo
     if save:
         df.to_csv("PLV_Data_All.csv", index=False)
         df_stats.to_csv("PLV_Stats.csv", index=False)
+    
+    return df

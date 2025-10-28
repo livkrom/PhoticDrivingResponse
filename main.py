@@ -5,6 +5,7 @@ from patients import parse_args, patient_files, eeg, save_pickle_results, filter
 from power import Power
 from phase import Phase
 from analytics import stats_base_power, stats_power, stats_plv
+from classification import feature_matrix, classification
 
 if __name__ == "__main__":
     # Reading data
@@ -56,5 +57,10 @@ if __name__ == "__main__":
     # Statistics
     responder_ids = {"2", "10", "11", "17", "21", "22", "32", "40", "46", "48", "51", "57", "63"}
     stats_base_power(FOLDER_POWER, paired=True, save=True) # Power baseline
-    stats_power(responder_ids, FOLDER_POWER, paired=True, save=True, plot=False)
-    stats_plv(responder_ids, FOLDER_PLV, paired=True, save=True, plot=False)
+    df_power = stats_power(responder_ids, FOLDER_POWER, paired=True, save=True, plot=False)
+    df_plv = stats_plv(responder_ids, FOLDER_PLV, paired=True, save=True, plot=False)
+
+    # Classification
+    df_features = classification(df_power, df_plv)
+    classification(df_features, "AB", verbose=True)
+
