@@ -5,7 +5,7 @@ from patients import parse_args, patient_files, eeg, save_pickle_results, filter
 from power import Power
 from phase import Phase
 from analytics import stats_base_power, stats_power, stats_plv
-from classification import feature_matrix, classification
+from classification import Classifier
 
 if __name__ == "__main__":
     # Reading data
@@ -13,15 +13,14 @@ if __name__ == "__main__":
     pt_files = patient_files(trial_map, args)
     skipped, complete_power, complete_plv = [], [], []
     all_mean_plv = {}
-    n = 0
-
+    N = 0
     PASSBAND = [0.5, 100]
     FOLDER_POWER = "results_POWER"
     FOLDER_PLV = "results_PLV"
 
     # for pt_file in pt_files:
-    #     n += 1
-    #     print(f"Processing file {n} out of {len(pt_files)}.")
+    #     N += 1
+    #     print(f"--- Processing file {n} out of {len(pt_files)}.")
 
     #     # Power calculation
     #     try:
@@ -61,6 +60,5 @@ if __name__ == "__main__":
     df_plv = stats_plv(responder_ids, FOLDER_PLV, paired=True, save=True, plot=False)
 
     # Classification
-    df_features = feature_matrix(df_power, df_plv)
-    classification(df_features, task="AB", verbose=True)
-
+    pipeline = Classifier(df_power=df_power, df_plv=df_plv)
+    pipeline.run(task="AB")

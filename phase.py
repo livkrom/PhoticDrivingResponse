@@ -170,7 +170,7 @@ class Phase:
 
                 filtered_epochs[(f,h)] = epochs
         filtered_epochs = pd.Series(filtered_epochs)
-        filtered_epochs.index = pd.MultiIndex.from_tuples(filtered_epochs.index, names=["Frequency", "Harmonic"])     
+        filtered_epochs.index = pd.MultiIndex.from_tuples(filtered_epochs.index, names=["Frequency", "Harmonic"])
 
         return filtered_epochs
 

@@ -1,6 +1,13 @@
+"""
+Module classification chooses the best classifier and performs the classification.
+"""
+from dataclasses import dataclass, field
+import warnings
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+
+from sklearn.exceptions import UndefinedMetricWarning
+
 from sklearn import svm
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score, GridSearchCV
@@ -12,98 +19,145 @@ from sklearn.feature_selection import VarianceThreshold, RFE
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis, QuadraticDiscriminantAnalysis
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import (accuracy_score, roc_auc_score, confusion_matrix, classification_report, roc_curve)
+from sklearn.metrics import (roc_auc_score, confusion_matrix, classification_report)
+
 from scipy.stats import shapiro
+warnings.filterwarnings(
+    "ignore",
+    message=".*covariance matrix of class.*not full rank.*",
+    category=RuntimeWarning,
+    module="sklearn.discriminant_analysis")
+warnings.filterwarnings(
+    "ignore",
+    message=".*covariance matrix of class.*not full rank.*",
+    category=UserWarning,
+    module="sklearn.discriminant_analysis")
+warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
+warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
 
-def feature_matrix(df_power, df_plv):
+@dataclass
+class Classifier:
     """
-    Combines the feature dataframe to one dataframe useable for classification. 
-
-    Paramaters
-    ----------
-    :df_power: pd.DataFrame
-        Dataframe with power values data.
-    :df_plv: pd.DataFrame
-        Datafrane with plv values data. 
-
-    Returns
-    -------
-    :df_features: pd.DataFrame
-        Contains a row per patient/time -- with all features as columns. 
-    :metadata: pd.DataFrame
-        Contains the patientID, timepoint and group of the cells.
-    :features: pd.DataFrame
-        Dataframe containing all features as columns and all patients as rows. 
+    Chooses a classifier based on a 10-time repeated cross-validation of claasifiers.
+    Performs classification.
     """
-    cols_power = ["Patient", "Time", "Group", "FreqPairCSV", "Average_SNR", "Average_PWR", "Average_BASE"]
-    cols_plv = ["Patient", "Time", "Group", "FreqPairCSV", "PLV"]
-    
-    df_merged = pd.merge(df_power[cols_power], df_plv[cols_plv], how = "outer",
-                         on = ["Patient", "Time", "Group", "FreqPairCSV"])
-    df_merged = df_merged.rename(columns = {"Average_PWR": "Power_Abs", 
-                                           "Average_SNR": "Power_SNR", 
-                                           "Average_BASE": "Power_Base"})
+    df_power: pd.DataFrame
+    df_plv: pd.DataFrame
+    n_repeats: int = 20
+    results: pd.DataFrame = field(default_factory=lambda: pd.DataFrame())
 
-    df_wide = df_merged.melt(
-        id_vars = ["Patient", "Time", "Group", "FreqPairCSV"],
-        var_name = "Metric", value_name = "Value")
-    df_wide["FeatureName"] =  df_wide["Metric"] + "__" + df_wide["FreqPairCSV"]
-    df_features = df_wide.pivot_table(index=["Patient", "Time", "Group"],
-                                      columns = "FeatureName", values = "Value").reset_index()
+    def run(self, task: str = "A"):
+        """
+        Runs the module. 
+        """
+        print(f"\nRunning classification task: {task}")
+        task = task.lower()
+        timepoints = []
 
-    return df_features
+        if task in ["a", "ab"]:
+            timepoints.append("t0")
+        if task in ["b", "ab"]:
+            timepoints.append("t2")
 
-def classification(df: pd.DataFrame, task: str = "A", verbose: bool = False):
-    """
-    Runs classification pipeline for different scenarios.
+        for tp in timepoints:
+            all_cv_results = []
 
-    Parameters
-    ----------
-    :df: pd.DataFrame
-        Contains a row per patient/time -- with all features as columns. 
-    :metadata: pd.DataFrame
-        Contains the patientID, timepoint and group of the cells.
-    :features: pd.DataFrame
-        Dataframe containing all features as columns and all patients as rows. 
-    :task: str
-        Type of classification you want to be done.
-        - A: predictive at t0, tries to predict group before treatment
-        - B: treatment effects at t2, tries to predict group after treatment
-        - AB: both of the above
-        ???
-        - C: treatment effects for responders, tries to predict dosage (zero or max)
-        - D: treatment effects fpr non-responders, tries to predict dosage (zero or max)
-    :verbose: bool
-        Option to be updated throughout running the script. 
-    """
-    results = {}
+            for i in range(self.n_repeats):
+                print(f"--- Run {i+1}/{self.n_repeats}")
+                df_features = self._feature_matrix(self.df_power, self.df_plv)
+                df_task = df_features[df_features["Time"] == tp]
+                x_train_scaled, x_test_scaled, y_train, y_test = self._preparation(df_task)
+                x_train_sel, x_test_sel, y_train = self._feature_selection(x_train_scaled, x_test_scaled, y_train)
+                cv_results = self._cross_val_classifiers(x_train_sel, y_train)
+                all_cv_results.append(pd.DataFrame(cv_results))
 
-    def run(df_features, label):
-        if verbose: print(f"Running {label}")
-    
+            combined = pd.concat(all_cv_results)
+            summary = combined.groupby("Model").agg({"Mean AUC": ["mean", "std"]}).reset_index()
+            summary.columns = ["Model", "Mean AUC (mean)", "Mean AUC (std)"]
+            self.results = summary.sort_values("Mean AUC (mean)", ascending=False)
+            print("\n=== Summary over all repetitions ===")
+            print(summary.sort_values("Mean AUC (mean)", ascending=False))
+
+            best_model_name = self.results.iloc[0]["Model"]
+            self._classifier_final(x_train_sel, x_test_sel, y_train, y_test, best_model_name)
+
+    def _feature_matrix(self, df_power, df_plv):
+        """
+        Combines the feature dataframe to one dataframe useable for classification. 
+
+        Paramaters
+        ----------
+        :df_power: pd.DataFrame
+            Dataframe with power values data.
+        :df_plv: pd.DataFrame
+            Datafrane with plv values data. 
+
+        Returns
+        -------
+        :df_features: pd.DataFrame
+            Contains a row per patient/time -- with all features as columns. 
+        :metadata: pd.DataFrame
+            Contains the patientID, timepoint and group of the cells.
+        :features: pd.DataFrame
+            Dataframe containing all features as columns and all patients as rows. 
+        """
+        cols_power = ["Patient", "Time", "Group", "FreqPairCSV", "Average_SNR", "Average_PWR", "Average_BASE"]
+        cols_plv = ["Patient", "Time", "Group", "FreqPairCSV", "PLV"]
+
+        df_merged = pd.merge(df_power[cols_power], df_plv[cols_plv], how = "outer",
+                            on = ["Patient", "Time", "Group", "FreqPairCSV"])
+        df_merged = df_merged.rename(columns = {"Average_PWR": "Power_Abs",
+                                            "Average_SNR": "Power_SNR", 
+                                            "Average_BASE": "Power_Base"})
+
+        df_wide = df_merged.melt(
+            id_vars = ["Patient", "Time", "Group", "FreqPairCSV"],
+            var_name = "Metric", value_name = "Value")
+        df_wide["FeatureName"] =  df_wide["Metric"] + "__" + df_wide["FreqPairCSV"]
+        df_features = df_wide.pivot_table(index=["Patient", "Time", "Group"],
+                                        columns = "FeatureName", values = "Value").reset_index()
+
+        return df_features
+
+    def _preparation(self, df_features):
+        """
+        Prepares the dataframe for classification process.
+        
+        Paramaters
+        ----------
+        :df_features: pd.DataFrame
+            Contains a row per patient/time -- with all features as columns.
+
+        Returns
+        -------
+        :X_train_scaled: 
+        :X_test_scaled: 
+        :y_train: 
+        :y_test: 
+        """
         # --- Data split --- #
-        X = df_features.drop(columns=["Patient", "Time", "Group"])
-        y = df_features["Group"].replace({"Responder": 1, "Non-responder": 0})
-    
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, stratify=y)
+        x = df_features.drop(columns=["Patient", "Time", "Group"])
+        y = df_features["Group"].map({"Responder": 1, "Non-responder": 0}).astype(int)
+
+        x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.20, stratify=y)
 
         # --- Adaptive feature scaling --- #
-        normal, outliers = 0, 0
+        outliers = 0
         scaler_count = {"standard": 0, "minmax": 0, "robust": 0}
         scalers = {}
-        for column in X_train.columns:
-            column_data = X_train[column].values
+        for column in x_train.columns:
+            column_data = x_train[column].values
 
             # Check for normal distribution
             _, pvalue = shapiro(column_data)
             not_normal_dist = 1 if float(pvalue) <= 0.05 else 0
 
             # Check for outliers
-            Q1 = np.percentile(column_data, 25)
-            Q3 = np.percentile(column_data, 75)
-            IQR = Q3 - Q1
-            lower_bound = Q1 - 1.5 * IQR
-            upper_bound = Q3 + 1.5 * IQR
+            q1 = np.percentile(column_data, 25)
+            q3 = np.percentile(column_data, 75)
+            iqr = q3 - q1
+            lower_bound = q1 - 1.5 * iqr
+            upper_bound = q3 + 1.5 * iqr
             outliers_count = np.sum((column_data < lower_bound) | (column_data > upper_bound))
             if outliers_count > 0:
                 outliers += 1
@@ -118,116 +172,155 @@ def classification(df: pd.DataFrame, task: str = "A", verbose: bool = False):
             else:
                 scalers[column] = RobustScaler()
                 scaler_count["robust"] += 1
-        
-        # Scaling
-        X_train_scaled = X_train.copy()
-        X_test_scaled = X_test.copy()
-        for col, scaler in scalers.items():
-            scaler.fit(X_train[[col]])
-            X_train_scaled[col] = scaler.transform(X_train[[col]])
-            X_test_scaled[col] = scaler.transform(X_test[[col]])
-        
-        if verbose: print(f"Scaling summary: {scaler_count}")
 
-        # --- Feature Reduction --- #
+        # Scaling
+        x_train_scaled = x_train.copy()
+        x_test_scaled = x_test.copy()
+        for col, scaler in scalers.items():
+            scaler.fit(x_train[[col]])
+            x_train_scaled[col] = scaler.transform(x_train[[col]])
+            x_test_scaled[col] = scaler.transform(x_test[[col]])
+
+        return x_train_scaled, x_test_scaled, y_train, y_test
+
+    def _feature_selection(self, x_train_scaled, x_test_scaled, y_train):
+        """
+        Selects the final features needed for classification.
+
+        Paramaters
+        ----------
+        :X_train_scaled: 
+        :X_test_scaled: 
+        :y_train:
+            Contains a row per patient/time -- with all features as columns.
+
+        Returns
+        -------
+        :X_train_scaled: 
+        :X_test_scaled: 
+        :y_train: 
+        """
         # Variance
         selection = VarianceThreshold(threshold = 0.01)
-        X_train_var = selection.fit_transform(X_train_scaled)
-        X_test_var = selection.transform(X_test_scaled)
-        selected_features = X_train_scaled.columns[selection.get_support()]
+        x_train_var = selection.fit_transform(x_train_scaled)
+        x_test_var = selection.transform(x_test_scaled)
+        selected_features = x_train_scaled.columns[selection.get_support()]
 
         # Correlation
-        X_train_corr = pd.DataFrame(X_train_var, columns=selected_features)
-        corr_matrix = X_train_corr.corr().abs()
+        x_train_corr = pd.DataFrame(x_train_var, columns=selected_features)
+        corr_matrix = x_train_corr.corr().abs()
         upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
         to_drop = [column for column in upper.columns if any(upper[column] > 0.95)]
-        X_train_corr = X_train_corr.drop(columns=to_drop)
-        X_test_corr = pd.DataFrame(X_test_var, columns=selected_features).drop(columns=to_drop)
-        X_test_corr = X_test_corr[X_train_corr.columns]
-
-        if verbose: 
-            print("Remaing features are: ({len(X_train_corr.columns)}):")
-            for col in X_train_corr.columns:
-                print(f" - {col}")
+        x_train_corr = x_train_corr.drop(columns=to_drop)
+        x_test_corr = pd.DataFrame(x_test_var, columns=selected_features).drop(columns=to_drop)
+        x_test_corr = x_test_corr[x_train_corr.columns]
 
         # Workaround with NaNs
         imputer = SimpleImputer(strategy="mean")
-        X_train_corr = pd.DataFrame(imputer.fit_transform(X_train_corr), columns=X_train_corr.columns)
-        X_test_corr = pd.DataFrame(imputer.transform(X_test_corr), columns=X_train_corr.columns)
+        x_train_corr = pd.DataFrame(imputer.fit_transform(x_train_corr), columns=x_train_corr.columns)
+        x_test_corr = pd.DataFrame(imputer.transform(x_test_corr), columns=x_train_corr.columns)
 
         # PCA
         pca = PCA(n_components=0.95)
-        X_train_pca = pca.fit_transform(X_train_corr)
-        X_test_pca = pca.transform(X_test_corr)
-
-        if verbose: print(f"Features dropped from {df_features.shape[1]} to {X_train_pca.shape[1]} after PCA.")
+        x_train_pca = pca.fit_transform(x_train_corr)
+        x_test_pca = pca.transform(x_test_corr)
 
         # --- Feature selection (RFE) --- #
         estimator = LogisticRegression(max_iter = 500, class_weight = "balanced")
-        n_features_to_select = min(20, X_train_pca.shape[1])
+        n_features_to_select = min(20, x_train_pca.shape[1])
         rfe = RFE(estimator, n_features_to_select = n_features_to_select)
-        X_train_sel = rfe.fit_transform(X_train_pca, y_train)
-        X_test_sel = rfe.transform(X_test_pca)
+        x_train_sel = rfe.fit_transform(x_train_pca, y_train)
+        x_test_sel = rfe.transform(x_test_pca)
 
-        if verbose: 
-            print(f"RFE selected {X_train_sel.shape[1]} features.")
+        return x_train_sel, x_test_sel, y_train
 
-        # --- Classifier: cross validation --- #
+    def _cross_val_classifiers(self, x_train_sel, y_train):
+        """
+        Performs a cross-validation for different classifiers, chooses final classifier.
+
+        Paramaters
+        ----------
+        :X_train_scaled: 
+        :y_train:
+            
+
+        Returns
+        -------
+        :cv_results: 
+        """
         clsfs = [LinearDiscriminantAnalysis(),QuadraticDiscriminantAnalysis(),KNeighborsClassifier(),GaussianNB(),
-                 LogisticRegression(),SGDClassifier(),RandomForestClassifier(), svm.SVC()]
+                    LogisticRegression(),SGDClassifier(),RandomForestClassifier(), svm.SVC()]
         clf_names = ["Linear Discriminant Analysis", "Quadratic Discriminant Analysis", "K-Neighbors", "Gaussian",
                     "Logistic Regression", "SGD", "Random Forest", "SVC"]
-        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        cv = StratifiedKFold(n_splits=3, shuffle=True)
         cv_results = []
 
-        print("\n--- Classifier baseline performance (CV AUC) ---")
         for name, clf in zip(clf_names, clsfs):
-            aucs = cross_val_score(clf, X_train_sel, y_train, cv=cv, scoring='roc_auc')
+            aucs = cross_val_score(clf, x_train_sel, y_train, cv=cv, scoring='roc_auc')
             cv_results.append({
                 "Model": name,
                 "Mean AUC": np.mean(aucs),
-                "Std AUC": np.std(aucs)
-            })
-            print(f"{name}: Mean AUC = {np.mean(aucs):.3f} ± {np.std(aucs):.3f}")
+                "Std AUC": np.std(aucs)})
 
-        # --- Final classifier: SVC --- #
-        svc = svm.SVC(probability=True)
-        param_grid = {
-            'C': [0.01, 0.1, 1, 10, 100],
-            'kernel': ['linear', 'rbf', 'poly', 'sigmoid'],
-            'gamma': ['scale', 'auto', 0.01, 0.1, 1],
-            'degree': [2, 3, 4]}
-        cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+        return cv_results
 
-        grid = GridSearchCV(
-            svc,
-            param_grid=param_grid,
-            scoring='roc_auc',
-            cv=cv,
-            n_jobs=-1,
-            verbose=2)
+    def _classifier_final(self, x_train_sel, x_test_sel, y_train, y_test, best_model_name):
+        """
+        Performs hyperparameter tuning and classification for the final classifier.
+        """
 
-        grid.fit(X_train_sel, y_train)
+        # Hyperparameters per classifier
+        classifiers = {
+        "Linear Discriminant Analysis": (LinearDiscriminantAnalysis(), None),
+        "Quadratic Discriminant Analysis": (QuadraticDiscriminantAnalysis(), None),
+        "K-Neighbors": (KNeighborsClassifier(), {
+            "n_neighbors": [3, 5, 7, 9],
+            "weights": ["uniform", "distance"],
+            "p": [1, 2]
+        }),
+        "Gaussian": (GaussianNB(), None),
+        "Logistic Regression": (LogisticRegression(max_iter=500), {
+            "C": [0.01, 0.1, 1, 10, 100],
+            "penalty": ["l2"],
+            "solver": ["lbfgs", "saga"]
+        }),
+        "SGD": (SGDClassifier(max_iter=1000, tol=1e-3), {
+            "loss": ["hinge", "log", "modified_huber"],
+            "alpha": [0.0001, 0.001, 0.01]
+        }),
+        "Random Forest": (RandomForestClassifier(), {
+            "n_estimators": [50, 100, 200],
+            "max_depth": [None, 5, 10],
+            "min_samples_split": [2, 5]
+        }),
+        "SVC": (svm.SVC(probability=True), {
+            "C": [0.01, 0.1, 1, 10, 100],
+            "kernel": ['linear', 'rbf', 'poly', 'sigmoid'],
+            "gamma": ['scale', 'auto', 0.01, 0.1, 1],
+            "degree": [2, 3, 4]
+        })}
 
-        print("Best parameters:", grid.best_params_)
-        print(f"Best CV AUC: {grid.best_score_:.3f}")
+        clf, param_grid = classifiers[best_model_name]
+        if param_grid is not None:
+            cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+            grid = GridSearchCV(clf, param_grid=param_grid, scoring='roc_auc', cv=cv, n_jobs=-1)
+            grid.fit(x_train_sel, y_train)
+            best_model = grid.best_estimator_
+            print(f"\nBest parameters for {best_model_name}: {grid.best_params_}")
+            print(f"Best CV AUC: {grid.best_score_:.3f}")
+        else:
+            best_model = clf.fit(x_train_sel, y_train)
+            print(f"No hyperparameter grid for {best_model_name}, fitted default parameters.")
 
-        # --- Evaluation on test set --- #
-        best_svc = grid.best_estimator_
-        y_pred = best_svc.predict(X_test_sel)
-        y_proba = best_svc.predict_proba(X_test_sel)[:, 1]
+        # Evaluate on test set
+        y_pred = best_model.predict(x_test_sel)
+        if hasattr(best_model, "predict_proba"):
+            y_proba = best_model.predict_proba(x_test_sel)[:, 1]
+        else:  # For classifiers without predict_proba
+            y_proba = best_model.decision_function(x_test_sel)
+            y_proba = (y_proba - y_proba.min()) / (y_proba.max() - y_proba.min())  # scale to 0-1
 
         auc = roc_auc_score(y_test, y_proba)
         print(f"Test ROC AUC: {auc:.3f}")
-        print(classification_report(y_test, y_pred))
+        print(classification_report(y_test, y_pred, zero_division=0))
         print("Confusion matrix:\n", confusion_matrix(y_test, y_pred))
-
-
-    # --- Run task on label
-    if task.lower() in ["a", "ab"]:
-        run(df[df["Time"] == "t0"], label="Task A (Predictive, t0)")
-    if task.lower() in ["b", "ab"]:
-        run(df[df["Time"] == "t2"], label="Task B (Treatment, t2)")
-
-    plt.show()
-    return

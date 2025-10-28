@@ -45,7 +45,7 @@ def statistic(n: int, values_per_tp: list, paired: bool):
             stat, p = friedmanchisquare(*values_per_tp)
             test = "Friedman chi-squared"
         else:
-            print(f"Can't compare only one group.")
+            print("Can't compare only one group.")
             return None, None, None
     else:
         if n == 2:
@@ -55,7 +55,7 @@ def statistic(n: int, values_per_tp: list, paired: bool):
             stat, p = kruskal(*values_per_tp)
             test = "Kruskal Wallis"
         else:
-            print(f"Can't compare only one group.")
+            print("Can't compare only one group.")
             return None, None, None
     return test, stat, p
 
@@ -127,7 +127,7 @@ def stats_base_power(folder_power: str, paired: bool = True, save: bool = False)
         # Choosing and performing statistical test
         n = len(timepoints)
         test, stat, p = statistic(n, values_per_tp, paired = True)
-        
+
         results.append({"Frequency": freq,
                 "Harmonic": harm,
                 "Test": test,
@@ -179,8 +179,8 @@ def stats_power(responder_id: list, folder_power: str, paired: bool = True, save
         data["Patient"] = patient
         data["Time"] = time_map.get(time)
         data["Group"] = "Responder" if patient in responders else "Non-responder"
-        data["Absolute Power"] = data["Average_PWR"] 
-        # You can change the right side of above line to "Average_PWR", "Average_BASE" or "Average_SNR", depending on what you want to see.
+        data["Absolute Power"] = data["Average_PWR"]
+        # Change above line to "Average_PWR", "Average_BASE" or "Average_SNR", depending on what you want to see.
         df_patient.append(data)
     df = pd.concat(df_patient, ignore_index=True)
     df["FreqPairPlot"] = df["Harmonic"].astype(str) + r"$\mathregular{ Hz_{S" + df["Frequency"].astype(str) + "}}$"
@@ -201,24 +201,24 @@ def stats_power(responder_id: list, folder_power: str, paired: bool = True, save
             for group in groups:
                 df_group = df_freq[df_freq["Group"] == group]
                 values_per_tp = []
-                
+
                 for tp in timepoints:
                     values = df_group[df_group["Time"] == tp][metric].values
                     values_per_tp.append(values)
-                
+
                 test, stat, p = statistic(len(timepoints), values_per_tp, paired)
                 results.append({ "FreqPair": freq, "Paired": paired, "Metric": metric,
                         "Comparison": f"{group}: {' vs '.join(timepoints)}",
                         "Test": test, "Statistic": stat, "p_value": p})
-                
+
             # Between-group comparison, for all timepoints
             for tp in timepoints:
                 values_per_group = []
 
-                for group in groups: 
+                for group in groups:
                     values = df_freq[(df_freq["Group"] == group) & (df_freq["Time"] == tp)][metric].values
                     values_per_group.append(values)
-                
+
                 test, stat, p = statistic(len(groups), values_per_group, paired=False)
                 results.append({ "FreqPair": freq, "Paired": False, "Metric": metric,
                     "Comparison": " vs ".join(groups) + f" at {tp}",
@@ -238,10 +238,10 @@ def stats_power(responder_id: list, folder_power: str, paired: bool = True, save
                         palette=filtered_palette, linewidth=0.8, width=0.55,
                         fliersize=3, sharey=True, col_order=["Responder", "Non-responder"],
                         height=6, aspect=1.3, legend=False)
-        
+
         g.set(ylim=(df["Absolute Power"][df["Absolute Power"] > 0].min()*0.8, None))
         #g.set(ylim=(-10,None)) # Use this one for SNR
-        
+
         for ax in g.axes.flatten():
             xticks = ax.get_xticks()
             xticklabels = [tick.get_text() for tick in ax.get_xticklabels()]
@@ -289,7 +289,7 @@ def stats_power(responder_id: list, folder_power: str, paired: bool = True, save
     if save:
         df.to_csv("Powers_Data_All.csv", index=False)
         df_stats.to_csv("Powers_Stats_All.csv", index=False)
-    
+
     return df
 
 def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bool = True, plot: bool = True):
@@ -336,7 +336,7 @@ def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bo
             df["Time"] = condition
             df["Group"] = "Responder" if patient in responders else "Non-responder"
             df["PLV"] = df["mean_plv"]
-            df["FreqPairPlot"] = df["Harmonic"].astype(str) + r"$\mathregular{ Hz_{"+ "S" + df["Frequency"].astype(str)+"}}$"
+            df["FreqPairPlot"] = df["Harmonic"].astype(str)+ r"$\mathregular{ Hz_{"+ "S" + df["Frequency"].astype(str)+"}}$"
             df["FreqPairCSV"] = df["Harmonic"].astype(str) + " Hz (S: " + df["Frequency"].astype(str) + ")"
             df["StimFreq"] = df["Frequency"].astype(str) + " Hz"
             df_patient.append(df)
@@ -347,7 +347,7 @@ def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bo
     timepoints = [tp for tp in sorted(df["Time"].unique()) if tp != "base"]
     freq_pairs = sorted(df["FreqPairCSV"].unique())
     groups = df["Group"].unique()
-   
+
     for freq in freq_pairs:
         df_freq = df[df["FreqPairCSV"] == freq]
 
@@ -355,16 +355,16 @@ def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bo
         for group in groups:
             df_group = df_freq[df_freq["Group"] == group]
             values_per_tp = []
-            
+
             for tp in timepoints:
                 values = df_group[df_group["Time"] == tp]["PLV"].values
                 values_per_tp.append(values)
-            
+
             test, stat, p = statistic(len(timepoints), values_per_tp, paired)
             results.append({ "FreqPair": freq, "Paired": paired, "Metric": "PLV",
                     "Comparison": f"{group}: {' vs '.join(timepoints)}",
                     "Test": test, "Statistic": stat, "p_value": p})
-            
+
         # Between-group comparison, for all timepoints
         for tp in timepoints:
             values_per_group = []
@@ -372,7 +372,7 @@ def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bo
             for group in groups: 
                 values = df_freq[(df_freq["Group"] == group) & (df_freq["Time"] == tp)]["PLV"].values
                 values_per_group.append(values)
-            
+
             test, stat, p = statistic(len(groups), values_per_group, paired=False)
             results.append({ "FreqPair": freq, "Paired": False,
                 "Comparison": " vs ".join(groups) + f" at {tp}",
@@ -442,5 +442,5 @@ def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bo
     if save:
         df.to_csv("PLV_Data_All.csv", index=False)
         df_stats.to_csv("PLV_Stats.csv", index=False)
-    
+
     return df
