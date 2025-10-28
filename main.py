@@ -61,6 +61,6 @@ if __name__ == "__main__":
     df_plv = stats_plv(responder_ids, FOLDER_PLV, paired=True, save=True, plot=False)
 
     # Classification
-    df_features = classification(df_power, df_plv)
-    classification(df_features, "AB", verbose=True)
+    df_features = feature_matrix(df_power, df_plv)
+    classification(df_features, task="AB", verbose=True)
 

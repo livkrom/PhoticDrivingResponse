@@ -1,13 +1,14 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
+from sklearn import svm
+from sklearn.impute import SimpleImputer
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score, GridSearchCV
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
-from sklearn.feature_selection import VarianceThreshold, RFE
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.naive_bayes import GaussianNB
-from sklearn.feature_selection import VarianceThreshold
+from sklearn.feature_selection import VarianceThreshold, RFE
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis, QuadraticDiscriminantAnalysis
 from sklearn.ensemble import RandomForestClassifier
@@ -39,7 +40,7 @@ def feature_matrix(df_power, df_plv):
     
     df_merged = pd.merge(df_power[cols_power], df_plv[cols_plv], how = "outer",
                          on = ["Patient", "Time", "Group", "FreqPairCSV"])
-    df_merged = df_merged.rename(colums = {"Average_PWR": "Power_Abs", 
+    df_merged = df_merged.rename(columns = {"Average_PWR": "Power_Abs", 
                                            "Average_SNR": "Power_SNR", 
                                            "Average_BASE": "Power_Base"})
 
@@ -84,7 +85,7 @@ def classification(df: pd.DataFrame, task: str = "A", verbose: bool = False):
         X = df_features.drop(columns=["Patient", "Time", "Group"])
         y = df_features["Group"].replace({"Responder": 1, "Non-responder": 0})
     
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, stratify=y, stratify=y)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, stratify=y)
 
         # --- Adaptive feature scaling --- #
         normal, outliers = 0, 0
@@ -121,7 +122,7 @@ def classification(df: pd.DataFrame, task: str = "A", verbose: bool = False):
         # Scaling
         X_train_scaled = X_train.copy()
         X_test_scaled = X_test.copy()
-        for col, scaler in scaler.items():
+        for col, scaler in scalers.items():
             scaler.fit(X_train[[col]])
             X_train_scaled[col] = scaler.transform(X_train[[col]])
             X_test_scaled[col] = scaler.transform(X_test[[col]])
@@ -132,7 +133,7 @@ def classification(df: pd.DataFrame, task: str = "A", verbose: bool = False):
         # Variance
         selection = VarianceThreshold(threshold = 0.01)
         X_train_var = selection.fit_transform(X_train_scaled)
-        X_test_var = selection.fit_transform(X_test_scaled)
+        X_test_var = selection.transform(X_test_scaled)
         selected_features = X_train_scaled.columns[selection.get_support()]
 
         # Correlation
@@ -140,15 +141,26 @@ def classification(df: pd.DataFrame, task: str = "A", verbose: bool = False):
         corr_matrix = X_train_corr.corr().abs()
         upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
         to_drop = [column for column in upper.columns if any(upper[column] > 0.95)]
-        X_train_corr.drop(columns=to_drop)
-        X_test_corr = pd.DataFrame(X_test_var, columns=selected_features).drio(columns=to_drop)
+        X_train_corr = X_train_corr.drop(columns=to_drop)
+        X_test_corr = pd.DataFrame(X_test_var, columns=selected_features).drop(columns=to_drop)
+        X_test_corr = X_test_corr[X_train_corr.columns]
+
+        if verbose: 
+            print("Remaing features are: ({len(X_train_corr.columns)}):")
+            for col in X_train_corr.columns:
+                print(f" - {col}")
+
+        # Workaround with NaNs
+        imputer = SimpleImputer(strategy="mean")
+        X_train_corr = pd.DataFrame(imputer.fit_transform(X_train_corr), columns=X_train_corr.columns)
+        X_test_corr = pd.DataFrame(imputer.transform(X_test_corr), columns=X_train_corr.columns)
 
         # PCA
         pca = PCA(n_components=0.95)
         X_train_pca = pca.fit_transform(X_train_corr)
         X_test_pca = pca.transform(X_test_corr)
 
-        if verbose: print(f"Features dropped from {df_features.shape[1]} to {X_train_pca.shape[1]}.")
+        if verbose: print(f"Features dropped from {df_features.shape[1]} to {X_train_pca.shape[1]} after PCA.")
 
         # --- Feature selection (RFE) --- #
         estimator = LogisticRegression(max_iter = 500, class_weight = "balanced")
@@ -158,17 +170,15 @@ def classification(df: pd.DataFrame, task: str = "A", verbose: bool = False):
         X_test_sel = rfe.transform(X_test_pca)
 
         if verbose: 
-            print(f"RFE selected {X_train_sel.shape[1]} features:")
-            for feature in X_train_pca.columns[rfe.support_]:
-                print(f" -{feature}")
+            print(f"RFE selected {X_train_sel.shape[1]} features.")
 
-        # --- Classifier --- #
+        # --- Classifier: cross validation --- #
         clsfs = [LinearDiscriminantAnalysis(),QuadraticDiscriminantAnalysis(),KNeighborsClassifier(),GaussianNB(),
-                 LogisticRegression(),SGDClassifier(),RandomForestClassifier(),svm.SVC()]
+                 LogisticRegression(),SGDClassifier(),RandomForestClassifier(), svm.SVC()]
         clf_names = ["Linear Discriminant Analysis", "Quadratic Discriminant Analysis", "K-Neighbors", "Gaussian",
                     "Logistic Regression", "SGD", "Random Forest", "SVC"]
         cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-        cv_results = {}
+        cv_results = []
 
         print("\n--- Classifier baseline performance (CV AUC) ---")
         for name, clf in zip(clf_names, clsfs):
@@ -180,11 +190,44 @@ def classification(df: pd.DataFrame, task: str = "A", verbose: bool = False):
             })
             print(f"{name}: Mean AUC = {np.mean(aucs):.3f} ± {np.std(aucs):.3f}")
 
+        # --- Final classifier: SVC --- #
+        svc = svm.SVC(probability=True)
+        param_grid = {
+            'C': [0.01, 0.1, 1, 10, 100],
+            'kernel': ['linear', 'rbf', 'poly', 'sigmoid'],
+            'gamma': ['scale', 'auto', 0.01, 0.1, 1],
+            'degree': [2, 3, 4]}
+        cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+
+        grid = GridSearchCV(
+            svc,
+            param_grid=param_grid,
+            scoring='roc_auc',
+            cv=cv,
+            n_jobs=-1,
+            verbose=2)
+
+        grid.fit(X_train_sel, y_train)
+
+        print("Best parameters:", grid.best_params_)
+        print(f"Best CV AUC: {grid.best_score_:.3f}")
+
+        # --- Evaluation on test set --- #
+        best_svc = grid.best_estimator_
+        y_pred = best_svc.predict(X_test_sel)
+        y_proba = best_svc.predict_proba(X_test_sel)[:, 1]
+
+        auc = roc_auc_score(y_test, y_proba)
+        print(f"Test ROC AUC: {auc:.3f}")
+        print(classification_report(y_test, y_pred))
+        print("Confusion matrix:\n", confusion_matrix(y_test, y_pred))
+
+
     # --- Run task on label
-    if task.lower() in ["a", "both"]:
+    if task.lower() in ["a", "ab"]:
         run(df[df["Time"] == "t0"], label="Task A (Predictive, t0)")
-    if task.lower() in ["b", "both"]:
+    if task.lower() in ["b", "ab"]:
         run(df[df["Time"] == "t2"], label="Task B (Treatment, t2)")
 
     plt.show()
-    return results
+    return
