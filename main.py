@@ -20,7 +20,7 @@ if __name__ == "__main__":
 
     # for pt_file in pt_files:
     #     N += 1
-    #     print(f"--- Processing file {n} out of {len(pt_files)}.")
+    #     print(f"--- Processing file {n}/{len(pt_files)}.")
 
     #     # Power calculation
     #     try:
@@ -61,4 +61,4 @@ if __name__ == "__main__":
 
     # Classification
     pipeline = Classifier(df_power=df_power, df_plv=df_plv)
-    pipeline.run(task="AB")
+    pipeline.run(task="abc")

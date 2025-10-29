@@ -54,15 +54,34 @@ class Classifier:
         Runs the module. 
         """
         task = task.lower()
-        timepoints = []
+        comparisons = []
 
-        if task in ["a", "ab"]:
-            timepoints.append("t0")
-        if task in ["b", "ab"]:
-            timepoints.append("t2")
+        # Define comparisons depending on the task
+        if "a" in task:
+            comparisons.append({"type": "time", "value": "t0"})
+        if "b" in task:
+            comparisons.append({"type": "time", "value": "t2"})
+        if "c" in task:
+            comparisons.append({"type": "group", "value": "Responder"})
+        if "d" in task:
+            comparisons.append({"type": "group", "value": "Non-responder"})
+        if not comparisons:
+            raise ValueError(f"Unknown task '{task}'. Use A, B, C, or D.")
 
-        for tp in timepoints:
-            print(f"\nRunning classification at timepoint {tp}")
+        for comp in comparisons:
+            df_features = self._feature_matrix(self.df_power, self.df_plv)
+
+            if comp["type"] == "time":
+                tp = comp["value"]
+                print(f"\nRunning classification at timepoint {tp} (Responder vs Non-responder)")
+                df_task = df_features[df_features["Time"] == tp]
+                target = "group"
+            else:
+                group = comp["value"]
+                print(f"\nRunning classification in group {group} (T0 vs T2)")
+                df_task = df_features[df_features["Group"] == group]
+                target = "time"
+
             auc_tracking = []
             all_cv_results = []
             feature_records = []
@@ -70,10 +89,8 @@ class Classifier:
 
             for i in range(self.n_repeats):
                 print(f"--- Run {i+1}/{self.n_repeats}")
-                df_features = self._feature_matrix(self.df_power, self.df_plv)
-                df_task = df_features[df_features["Time"] == tp]
 
-                x_train_sel, x_test_sel, y_train, y_test, t_record = self._feature_selection(df_task)
+                x_train_sel, x_test_sel, y_train, y_test, t_record = self._feature_selection(df_task, target=target)
                 transformation_records.append(t_record)
                 feature_records.append(t_record["rfe_features"])
 
@@ -101,12 +118,19 @@ class Classifier:
             best_iter_idx = int(best_iter_row["Iteration"])
 
             best_transform_record = transformation_records[best_iter_idx]
-            df_features = self._feature_matrix(self.df_power, self.df_plv)
-            df_task = df_features[df_features["Time"] == tp]
-            x = df_task.drop(columns=["Patient", "Time", "Group"])
-            y = df_task["Group"].map({"Responder": 1, "Non-responder": 0}).astype(int)
-            x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.20, stratify=y)
+            df_task_final = df_task.copy()
 
+            if comp["type"] == "time":
+                df_task = df_features[df_features["Time"] == tp]
+                x = df_task_final.drop(columns=["Patient", "Time", "Group"])
+                y = df_task_final["Group"].map({"Responder": 1, "Non-responder": 0}).astype(int)
+
+            else:
+                df_task = df_features[df_features["Group"] == group]
+                x = df_task_final.drop(columns=["Patient", "Time", "Group"])
+                y = df_task_final["Time"].map({"t0": 0, "t2": 1}).astype(int)
+
+            x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.20, stratify=y)
             x_train_sel, x_test_sel = self._apply_transformations_from_record(best_transform_record, x_train, x_test)
             self._classifier_final(x_train_sel, x_test_sel, y_train, y_test, best_model_name)
 
@@ -134,6 +158,7 @@ class Classifier:
         cols_power = ["Patient", "Time", "Group", "FreqPairCSV", "Average_SNR", "Average_PWR", "Average_BASE"]
         cols_plv = ["Patient", "Time", "Group", "FreqPairCSV", "PLV"]
 
+        df_plv = df_plv[df_plv["Time"].str.lower() != "base"]
         df_merged = pd.merge(df_power[cols_power], df_plv[cols_plv], how = "outer",
                             on = ["Patient", "Time", "Group", "FreqPairCSV"])
         df_merged = df_merged.rename(columns = {"Average_PWR": "Power_Abs",
@@ -149,7 +174,7 @@ class Classifier:
 
         return df_features
 
-    def _feature_selection(self, df_features):
+    def _feature_selection(self, df_features, target: str = "group"):
         """
         Prepares the dataframe for classification process.
         
@@ -165,10 +190,18 @@ class Classifier:
         :y_train: 
         :y_test: 
         """
-        # --- Data split --- #
         x = df_features.drop(columns=["Patient", "Time", "Group"])
-        y = df_features["Group"].map({"Responder": 1, "Non-responder": 0}).astype(int)
+        if target == "group":
+            y = df_features["Group"].map({"Responder": 1, "Non-responder": 0}).astype(int)
+        elif target == "time":
+            y = df_features["Time"].map({"t0": 0, "t2": 1}).astype(int)
+        else:
+            raise ValueError("target must be 'group' or 'time'")
 
+        if len(np.unique(y)) < 2:
+            raise ValueError(f"Not enough classes in target for target='{target}'. Unique labels: {np.unique(y)}")
+
+        # --- Data split --- #
         x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.20, stratify=y)
 
         # --- Adaptive feature scaling --- #
@@ -343,7 +376,7 @@ class Classifier:
             "alpha": [0.0001, 0.001, 0.01]
         }),
         "Random Forest": (RandomForestClassifier(), {
-            "n_estimators": [50, 100, 200],
+            "n_estimators": [10, 20, 30, 40, 50, 60],
             "max_depth": [None, 5, 10],
             "min_samples_split": [2, 5]
         }),
