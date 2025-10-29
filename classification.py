@@ -2,6 +2,7 @@
 Module classification chooses the best classifier and performs the classification.
 """
 from dataclasses import dataclass, field
+from typing import Dict, Any
 import warnings
 import numpy as np
 import pandas as pd
@@ -20,6 +21,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis, QuadraticDiscriminantAnalysis
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (roc_auc_score, confusion_matrix, classification_report)
+from sklearn.exceptions import ConvergenceWarning
 
 from scipy.stats import shapiro
 warnings.filterwarnings(
@@ -33,7 +35,8 @@ warnings.filterwarnings(
     category=UserWarning,
     module="sklearn.discriminant_analysis")
 warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
-warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
 @dataclass
 class Classifier:
@@ -50,7 +53,6 @@ class Classifier:
         """
         Runs the module. 
         """
-        print(f"\nRunning classification task: {task}")
         task = task.lower()
         timepoints = []
 
@@ -60,26 +62,54 @@ class Classifier:
             timepoints.append("t2")
 
         for tp in timepoints:
+            print(f"\nRunning classification at timepoint {tp}")
+            auc_tracking = []
             all_cv_results = []
+            feature_records = []
+            transformation_records = []
 
             for i in range(self.n_repeats):
                 print(f"--- Run {i+1}/{self.n_repeats}")
                 df_features = self._feature_matrix(self.df_power, self.df_plv)
                 df_task = df_features[df_features["Time"] == tp]
-                x_train_scaled, x_test_scaled, y_train, y_test = self._preparation(df_task)
-                x_train_sel, x_test_sel, y_train = self._feature_selection(x_train_scaled, x_test_scaled, y_train)
+
+                x_train_sel, x_test_sel, y_train, y_test, t_record = self._feature_selection(df_task)
+                transformation_records.append(t_record)
+                feature_records.append(t_record["rfe_features"])
+
                 cv_results = self._cross_val_classifiers(x_train_sel, y_train)
                 all_cv_results.append(pd.DataFrame(cv_results))
+
+                for row in cv_results:
+                    auc_tracking.append({"Iteration": i,
+                                         "Model": row["Model"],
+                                         "Mean AUC": row["Mean AUC"]})
 
             combined = pd.concat(all_cv_results)
             summary = combined.groupby("Model").agg({"Mean AUC": ["mean", "std"]}).reset_index()
             summary.columns = ["Model", "Mean AUC (mean)", "Mean AUC (std)"]
             self.results = summary.sort_values("Mean AUC (mean)", ascending=False)
+
             print("\n=== Summary over all repetitions ===")
             print(summary.sort_values("Mean AUC (mean)", ascending=False))
 
             best_model_name = self.results.iloc[0]["Model"]
+            print(f"Choosing classifier {best_model_name} as final classifier.")
+
+            auc_df = pd.DataFrame(auc_tracking)
+            best_iter_row = auc_df[auc_df["Model"] == best_model_name].sort_values("Mean AUC", ascending=False).iloc[0]
+            best_iter_idx = int(best_iter_row["Iteration"])
+
+            best_transform_record = transformation_records[best_iter_idx]
+            df_features = self._feature_matrix(self.df_power, self.df_plv)
+            df_task = df_features[df_features["Time"] == tp]
+            x = df_task.drop(columns=["Patient", "Time", "Group"])
+            y = df_task["Group"].map({"Responder": 1, "Non-responder": 0}).astype(int)
+            x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.20, stratify=y)
+
+            x_train_sel, x_test_sel = self._apply_transformations_from_record(best_transform_record, x_train, x_test)
             self._classifier_final(x_train_sel, x_test_sel, y_train, y_test, best_model_name)
+
 
     def _feature_matrix(self, df_power, df_plv):
         """
@@ -119,7 +149,7 @@ class Classifier:
 
         return df_features
 
-    def _preparation(self, df_features):
+    def _feature_selection(self, df_features):
         """
         Prepares the dataframe for classification process.
         
@@ -181,30 +211,11 @@ class Classifier:
             x_train_scaled[col] = scaler.transform(x_train[[col]])
             x_test_scaled[col] = scaler.transform(x_test[[col]])
 
-        return x_train_scaled, x_test_scaled, y_train, y_test
-
-    def _feature_selection(self, x_train_scaled, x_test_scaled, y_train):
-        """
-        Selects the final features needed for classification.
-
-        Paramaters
-        ----------
-        :X_train_scaled: 
-        :X_test_scaled: 
-        :y_train:
-            Contains a row per patient/time -- with all features as columns.
-
-        Returns
-        -------
-        :X_train_scaled: 
-        :X_test_scaled: 
-        :y_train: 
-        """
         # Variance
-        selection = VarianceThreshold(threshold = 0.01)
-        x_train_var = selection.fit_transform(x_train_scaled)
-        x_test_var = selection.transform(x_test_scaled)
-        selected_features = x_train_scaled.columns[selection.get_support()]
+        variance_selector = VarianceThreshold(threshold = 0.01)
+        x_train_var = variance_selector.fit_transform(x_train_scaled)
+        x_test_var = variance_selector.transform(x_test_scaled)
+        selected_features = x_train_scaled.columns[variance_selector.get_support()]
 
         # Correlation
         x_train_corr = pd.DataFrame(x_train_var, columns=selected_features)
@@ -231,8 +242,51 @@ class Classifier:
         rfe = RFE(estimator, n_features_to_select = n_features_to_select)
         x_train_sel = rfe.fit_transform(x_train_pca, y_train)
         x_test_sel = rfe.transform(x_test_pca)
+        rfe_features = rfe.get_support(indices=True)
 
-        return x_train_sel, x_test_sel, y_train
+        t_record = dict(
+            scalers=scalers,
+            variance_selector=variance_selector,
+            to_drop=to_drop,
+            imputer=imputer,
+            pca=pca,
+            rfe=rfe,
+            rfe_features=rfe_features,
+            final_columns_after_var_corr=x_train_corr.columns
+        )
+        return x_train_sel, x_test_sel, y_train, y_test, t_record
+
+    def _apply_transformations_from_record(self, t_record: Dict[str, Any], x_train, x_test):
+        """
+        Applies final feature selection. 
+        """
+        # SCALERS
+        for col, scaler in t_record["scalers"].items():
+            x_train.loc[:, col] = scaler.transform(x_train[[col]]).flatten()
+            x_test.loc[:, col] = scaler.transform(x_test[[col]]).flatten()
+
+        # VARIANCE
+        x_train_var = t_record["variance_selector"].transform(x_train)
+        x_test_var = t_record["variance_selector"].transform(x_test)
+        selected_columns_var = x_train.columns[t_record["variance_selector"].get_support()]
+
+        # CORRELATION
+        x_train_corr = pd.DataFrame(x_train_var, columns=selected_columns_var).drop(columns=t_record["to_drop"])
+        x_test_corr = pd.DataFrame(x_test_var, columns=selected_columns_var).drop(columns=t_record["to_drop"])
+        x_test_corr = x_test_corr[x_train_corr.columns]
+
+        # IMPUTER
+        x_train_corr = pd.DataFrame(t_record["imputer"].transform(x_train_corr), columns=x_train_corr.columns)
+        x_test_corr = pd.DataFrame(t_record["imputer"].transform(x_test_corr), columns=x_train_corr.columns)
+
+        # PCA
+        x_train_pca = t_record["pca"].transform(x_train_corr)
+        x_test_pca = t_record["pca"].transform(x_test_corr)
+
+        # RFE
+        x_train_sel = t_record["rfe"].transform(x_train_pca)
+        x_test_sel = t_record["rfe"].transform(x_test_pca)
+        return x_train_sel, x_test_sel
 
     def _cross_val_classifiers(self, x_train_sel, y_train):
         """
