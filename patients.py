@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 from collections import defaultdict
 import numpy as np
+import shutil
 import mne
 from mne.io.base import BaseRaw
 mne.set_log_level('error')
@@ -105,13 +106,16 @@ def eeg(src, passband, notch = 50, occi: bool = False, plot: bool = False)-> Bas
     lowpass = np.arange(line_freq, raw.info["lowpass"]+1, line_freq)
     raw.notch_filter(freqs=(lowpass), notch_widths=(lowpass)/line_freq, picks=["eeg"], verbose='ERROR')
 
+    
+    if "EOG" in raw.ch_names: raw.drop_channels("EOG")
+    if occi:
+        raw = raw.copy().pick(["O1", "O2", "Oz"])
+    
     threshold = 1e-6
-    channels_dropped = set(['EOG']+[ch for ch in raw.ch_names if np.all(np.abs(raw.get_data(picks=ch))<threshold)])
+    channels_dropped = set([ch for ch in raw.ch_names if np.all(np.abs(raw.get_data(picks=ch))<threshold)])
     if channels_dropped:
         raw.drop_channels([ch for ch in channels_dropped if ch in raw.ch_names])
         print(f"Dropped channels: {channels_dropped}")
-    if occi:
-        raw = raw.copy().pick(["O1", "O2", "Oz"])
 
     if plot:
         raw.plot(scalings = "auto", title="Filtered EEG data", show=True, block=True)
@@ -152,7 +156,7 @@ def save_pickle_results(data, pt_file, folder_name, feat: str = "power"):
 def filter_files(folder: str, time_map: dict, args, feat: str = "power"):
     """
     Filters patients with complete data across required timepoints for either power or PLV results.
-    Moves incomplete patient files to ./incomplete_files.
+    Moves incomplete patient files to ./results_incomplete.
 
     Parameters
     ----------
@@ -219,9 +223,66 @@ def filter_files(folder: str, time_map: dict, args, feat: str = "power"):
 
     to_remove = [f for f in all_files if f.stem.split("_", 1)[0] not in complete]
 
-    trash_folder = Path("./incomplete_files")
+    trash_folder = Path("./results_incomplete")
     trash_folder.mkdir(parents=True, exist_ok=True)
     for f in to_remove:
         f.rename(trash_folder / f.name)
 
     return sorted(complete)
+
+def add_other_patients(trial_map: dict[str, str], args: argparse.Namespace, processed_ids: set[str]) -> list[Path]:
+    """
+    Recover unprocessed .cnt files from T0-only folders based on trial logic.
+    """
+    recovered_files = []
+    base_data_path = Path("/Volumes/Docs/Bruikbare Data")
+    folders_to_check = []
+
+    if args.trial == "t0":
+        folders_to_check = ["T0_T1", "T0_T2"]
+    elif args.trial == "t1":
+        folders_to_check = ["T0_T2"]
+    elif args.trial == "t2":
+        folders_to_check = ["T0_T1"]
+
+    for folder_name in folders_to_check:
+        folder_path = base_data_path / folder_name / "t0"
+        if folder_path.exists():
+            for f in folder_path.glob("*.cnt"):
+                patient_id = re.match(r"(VEP\d+)", f.name)
+                if patient_id and patient_id.group(1) not in processed_ids:
+                    recovered_files.append(f)
+
+    return sorted(recovered_files)
+
+def sort_incomplete_results(source_folder: str, power_folder: str, plv_folder: str) -> None:
+    """
+    Sorts .pkl files from a mixed folder into power and PLV subfolders based on filename.
+
+    Parameters
+    ----------
+    source_folder : str
+        Path to the folder containing mixed .pkl files.
+    power_folder : str
+        Destination folder for power files.
+    plv_folder : str
+        Destination folder for PLV files.
+    """
+    source = Path(source_folder)
+    power_dest = Path(power_folder)
+    plv_dest = Path(plv_folder)
+    power_dest.mkdir(parents=True, exist_ok=True)
+    plv_dest.mkdir(parents=True, exist_ok=True)
+
+    for f in source.glob("*.pkl"):
+        name = f.name
+        if "_power.pkl" in name:
+            dest = power_dest / name
+        elif "_plv_stim.pkl" in name or "_plv_base.pkl" in name:
+            dest = plv_dest / name
+        else:
+            print(f"Skipping unknown file: {name}")
+            continue
+
+        if not dest.exists():
+            shutil.move(str(f), str(dest))
