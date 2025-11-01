@@ -15,13 +15,13 @@ matplotlib.use("TkAgg")
 
 @dataclass
 class Phase:
-    """ Implements the full phasey calculation pipeline for EEG data. """
+    """ Implements the full phase calculation for EEG data. """
     passband: list
     eeg: BaseRaw
 
     def run(self):
         """
-        Run the full pipeline on EEg data and return the SNR DataFrame.
+        Run the full pipeline on EEG data and returns the PLV DataFrame.
         
         :EEG: filtered EEG data, should contain trigger timing in annotations.
         """
@@ -32,6 +32,10 @@ class Phase:
         plv_base = self._fft_phase(epochs_base, plot=False, save=False)
 
         return plv_stim, plv_base
+
+    # -------------------------
+    # Subfunctions
+    # -------------------------
 
     @staticmethod
     def _stimulation_phase(raw:BaseRaw, save: bool = False, base: bool = False) -> pd.DataFrame:
@@ -136,17 +140,11 @@ class Phase:
             EEG data, should contain trigger timing in annotations.
         :upper_lim: integer
             Maximum frequency that we are interested in, default is in the lower end of the gamma-band.
-        :save: bool, optional
-            Option to save the made dataframe.
-        :baseline_blocks: ..., optional
-            ...
 
         Returns
         -------
         :filtered_epochs: dict containing mne.Epochs
             Dictionary with keys (stim_freq, harmonic_freq) and values mne.Epochs objects.
-        freqs : pd.DataFrame
-            MultiIndex DataFrame listing all frequency-harmonic pairs.
         """
         freqs_stim = df["freq"].unique()
         filtered_epochs = {}
@@ -236,10 +234,9 @@ class Phase:
             for idx, ((f,h), content) in enumerate(phases.items()):
                 p = content["angles"]
                 ax = axes[idx]
-                ep = filtered_epochs[(f,h)]
                 n_epochs, n_channels = p.shape
 
-                ax.set_title(r'$p(\theta \mid f=%d\,Hz, h=%d)$' % (f,h), fontsize=10,
+                ax.set_title(fr'$p(\theta \mid f={f}\,Hz, h={h})$', fontsize=10,
                              y = 0.0, x = -0.5, rotation = 90, ha = 'left', va='bottom')
 
                 for ch_idx in range(n_channels):

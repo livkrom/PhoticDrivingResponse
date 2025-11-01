@@ -12,7 +12,7 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 
-def statistic(n: int, values_per_tp: list, paired: bool):
+def statistic(n: int, values_per_tp: list, paired: bool)-> tuple[str, float,float]:
     """
     Chooses and runs the appropriate statistical test based on number of timepoints and pairing.
 
@@ -28,11 +28,11 @@ def statistic(n: int, values_per_tp: list, paired: bool):
     Returns
     -------
     :test_name: str
-        Name of the statistical test used.
+        Name of the used statistical test.
     :stat: float
-        Test statistic.
+        Resultidng test statistic.
     :p: float
-        p-value.
+        Resulting p-value.
     """
     if any(len(v) < 3 for v in values_per_tp):
         return "Insufficient data", None, None
@@ -59,10 +59,10 @@ def statistic(n: int, values_per_tp: list, paired: bool):
             return None, None, None
     return test, stat, p
 
-def stats_base_power(folder_power: str, paired: bool = True, save: bool = False):
+def stats_base_power(folder_power: str, paired: bool = True, save: bool = False)-> pd.DataFrame:
     """
-    Checks if there is a difference in baseline frequencies.
-    In this code we average over all given baseline channels. 
+    Analysis for statistical difference between groups without stimulation.
+    Averages over all given baseline channels. 
 
     Parameters
     ----------
@@ -74,6 +74,11 @@ def stats_base_power(folder_power: str, paired: bool = True, save: bool = False)
         For now we are testing on paired data, but this will not always be the case. 
     :save: bool
         Option to save the made baseline statistics dataframe. 
+
+    Returns
+    -------
+    :df_results: pd.DataFrame
+        Contains statistical test outcomes for power-baseline comparisons.
     """
     path_power = Path(f"./{folder_power}")
     files = list(path_power.glob("*_power.pkl"))
@@ -140,17 +145,18 @@ def stats_base_power(folder_power: str, paired: bool = True, save: bool = False)
 
     # Optie om de dataframe op te slaan.
     if save:
-        df_results.to_csv("base_stats.csv", sep=";", index=False)
+        df_results.to_csv("results/base_stats.csv", sep=";", index=False)
 
     return df_results
 
-def stats_power(responder_id: list, folder_power: str, paired: bool = True, save: bool = False, plot: bool = True):
+def stats_power(responder_id: list, folder_power: str, paired: bool = True, save: bool = False, plot: bool = True
+                )-> pd.DataFrame:
     """
-    This code checks if there is a statistical difference between the different timepoints.
+    Analyses for statistical difference between groups based on power metrics.
 
     Parameters
     ----------
-    :responders_numbers:
+    :responder_id:
         List of patient_IDs corresponding to patients that respond to the medication. 
     :folder_power: str
         Name of the patient file: VEPxx_T, xx = patient ID, T = timepoint.
@@ -158,8 +164,11 @@ def stats_power(responder_id: list, folder_power: str, paired: bool = True, save
         For now we are testing on paired data, but this will not always be the case. 
     :save: bool
         Option to save the made baseline statistics dataframe.
-    :abs: bool
-        Option to either use absolute or relative values. 
+    
+    Returns
+    -------
+    :df: pd.Dataframe
+        Contains statistical test outcomes for all power comparisons.
     """
     # Finding files
     path_power = Path(f"./{folder_power}")
@@ -287,18 +296,19 @@ def stats_power(responder_id: list, folder_power: str, paired: bool = True, save
         plt.show()
 
     if save:
-        df.to_csv("Powers_Data_All.csv", index=False)
-        df_stats.to_csv("Powers_Stats_All.csv", index=False)
+        df.to_csv("results/Powers_Data_All.csv", index=False)
+        df_stats.to_csv("results/Powers_Stats_All.csv", index=False)
 
     return df
 
-def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bool = True, plot: bool = True):
+def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bool = True, plot: bool = True
+              )-> pd.DataFrame:
     """
-    This code checks if there is a statistical difference between the different timepoints.
+    Analyses for statistical difference between groups based on the PLV.
 
     Parameters
     ----------
-    :responders_numbers:
+    :responder_id:
         List of patient_IDs corresponding to patients that respond to the medication. 
     :folder_power: str
         Name of the patient file: VEPxx_T, xx = patient ID, T = timepoint.
@@ -306,8 +316,11 @@ def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bo
         For now we are testing on paired data, but this will not always be the case. 
     :save: bool
         Option to save the made baseline statistics dataframe.
-    :abs: bool
-        Option to either use absolute or relative values. 
+    
+    Returns
+    -------
+    :df: pd.DataFrame
+        Contains statistical test outcomes for all PLV comparisons.
     """
     # Finding files
     path_plv = Path(f"./{folder_plv}")
@@ -336,7 +349,7 @@ def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bo
             df["Time"] = condition
             df["Group"] = "Responder" if patient in responders else "Non-responder"
             df["PLV"] = df["mean_plv"]
-            df["FreqPairPlot"] = df["Harmonic"].astype(str)+ r"$\mathregular{ Hz_{"+ "S" + df["Frequency"].astype(str)+"}}$"
+            df["FreqPairPlot"] = df["Harmonic"].astype(str)+r"$\mathregular{ Hz_{"+"S"+df["Frequency"].astype(str)+"}}$"
             df["FreqPairCSV"] = df["Harmonic"].astype(str) + " Hz (S: " + df["Frequency"].astype(str) + ")"
             df["StimFreq"] = df["Frequency"].astype(str) + " Hz"
             df_patient.append(df)
@@ -369,7 +382,7 @@ def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bo
         for tp in timepoints:
             values_per_group = []
 
-            for group in groups: 
+            for group in groups:
                 values = df_freq[(df_freq["Group"] == group) & (df_freq["Time"] == tp)]["PLV"].values
                 values_per_group.append(values)
 
@@ -440,7 +453,7 @@ def stats_plv(responder_id: list, folder_plv: str, paired: bool = True, save: bo
         plt.tight_layout(pad=2)
 
     if save:
-        df.to_csv("PLV_Data_All.csv", index=False)
-        df_stats.to_csv("PLV_Stats.csv", index=False)
+        df.to_csv("results/PLV_Data_All.csv", index=False)
+        df_stats.to_csv("results/PLV_Stats.csv", index=False)
 
     return df

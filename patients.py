@@ -5,8 +5,9 @@ import re
 import argparse
 from pathlib import Path
 from collections import defaultdict
-import numpy as np
 import shutil
+import numpy as np
+import pandas as pd
 import mne
 from mne.io.base import BaseRaw
 mne.set_log_level('error')
@@ -20,6 +21,8 @@ def parse_args()-> tuple[dict[str, str], argparse.Namespace]:
     -------
     :trial_map: dict of str
         Mapping from trial keys ("t0", "t1", "t2") to their corresponding folder names.
+    :time_map: dict[str, list[str]]
+        Mapping from trial keys to theis valid timepoints.
     :args: argparse.Namespace
         Parsed arguments with attributes:
         - trial : str
@@ -106,11 +109,11 @@ def eeg(src, passband, notch = 50, occi: bool = False, plot: bool = False)-> Bas
     lowpass = np.arange(line_freq, raw.info["lowpass"]+1, line_freq)
     raw.notch_filter(freqs=(lowpass), notch_widths=(lowpass)/line_freq, picks=["eeg"], verbose='ERROR')
 
-    
-    if "EOG" in raw.ch_names: raw.drop_channels("EOG")
+    if "EOG" in raw.ch_names:
+        raw.drop_channels("EOG")
     if occi:
         raw = raw.copy().pick(["O1", "O2", "Oz"])
-    
+
     threshold = 1e-6
     channels_dropped = set([ch for ch in raw.ch_names if np.all(np.abs(raw.get_data(picks=ch))<threshold)])
     if channels_dropped:
@@ -122,7 +125,7 @@ def eeg(src, passband, notch = 50, occi: bool = False, plot: bool = False)-> Bas
 
     return raw
 
-def save_pickle_results(data, pt_file, folder_name, feat: str = "power"):
+def save_pickle_results(data: pd.DataFrame, pt_file: str, folder_name: str, feat: str = "power"):
     """
     Saves dataframes (singles or multiple) as pickle files in designated pathway.
 
@@ -132,13 +135,10 @@ def save_pickle_results(data, pt_file, folder_name, feat: str = "power"):
         Name of the patient file: VEPxx_T, xx = patient ID, T = timepoint.
     :pt_file: str
         Dataframe containing powers at different frequencies. 
-    :folder_name:
+    :folder_name: str
         Name for the folder to save the pickle files. 
     :feat: str
-        Type of feature that is being saved. Either "power" or "plv". 
-    :verbose: bool, optional
-        Option to print statements. 
-
+        Type of feature that is being saved. Either "power" or "plv".
     """
     path = Path(f"./{folder_name}")
     path.mkdir(parents=True, exist_ok=True)
@@ -151,16 +151,14 @@ def save_pickle_results(data, pt_file, folder_name, feat: str = "power"):
         single_path = path / f"{pt_file.stem}_{feat}.pkl"
         data.to_pickle(single_path)
 
-    return
-
-def filter_files(folder: str, time_map: dict, args, feat: str = "power"):
+def filter_files(folder: str, time_map: dict[str, list[str]], args: argparse.Namespace,
+                 feat: str = "power") -> list[str]:
     """
     Filters patients with complete data across required timepoints for either power or PLV results.
     Moves incomplete patient files to ./results_incomplete.
 
     Parameters
-    ----------
-    :folder_power: str
+    :folder: str
         Name of the folder containing the power results.
     :trial_map: dict
         Dictionary mapping trial arguments to folder names.
@@ -230,9 +228,21 @@ def filter_files(folder: str, time_map: dict, args, feat: str = "power"):
 
     return sorted(complete)
 
-def add_other_patients(trial_map: dict[str, str], args: argparse.Namespace, processed_ids: set[str]) -> list[Path]:
+def add_patients(args: argparse.Namespace, processed_ids: set[str]) -> list[Path]:
     """
     Recover unprocessed .cnt files from T0-only folders based on trial logic.
+    
+    Parameters
+    ----------
+    :args: argpare.Namespace
+        Parsed arguments with attributes trial & time.
+    :processed_ids: set of str
+        Patient files that have been used as train data.
+
+    Returns
+    -------
+    :sorted(recovered_files): list
+        Patient files that will be used as unseen test data.
     """
     recovered_files = []
     base_data_path = Path("/Volumes/Docs/Bruikbare Data")
@@ -255,17 +265,17 @@ def add_other_patients(trial_map: dict[str, str], args: argparse.Namespace, proc
 
     return sorted(recovered_files)
 
-def sort_incomplete_results(source_folder: str, power_folder: str, plv_folder: str) -> None:
+def sort_results(source_folder: str, power_folder: str, plv_folder: str) -> None:
     """
     Sorts .pkl files from a mixed folder into power and PLV subfolders based on filename.
 
     Parameters
     ----------
-    source_folder : str
+    :source_folder: str
         Path to the folder containing mixed .pkl files.
-    power_folder : str
+    :power_folder: str
         Destination folder for power files.
-    plv_folder : str
+    :plv_folder: str
         Destination folder for PLV files.
     """
     source = Path(source_folder)

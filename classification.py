@@ -2,7 +2,7 @@
 Module classification chooses the best classifier and performs the classification.
 """
 from dataclasses import dataclass, field
-from typing import Dict, Any
+from typing import Dict, Any, Tuple, List
 import warnings
 import numpy as np
 import pandas as pd
@@ -14,10 +14,9 @@ from sklearn import svm
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score, GridSearchCV
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
-from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.naive_bayes import GaussianNB
-from sklearn.feature_selection import VarianceThreshold, RFE, RFECV
+from sklearn.feature_selection import VarianceThreshold, RFECV
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis, QuadraticDiscriminantAnalysis
 from sklearn.ensemble import RandomForestClassifier
@@ -42,7 +41,7 @@ warnings.filterwarnings("ignore", category=ConvergenceWarning)
 @dataclass
 class Classifier:
     """
-    Chooses a classifier based on a 10-time repeated cross-validation of claasifiers.
+    Chooses a classifier based on a 20-time repeated cross-validation of classifiers.
     Performs classification.
     """
     df_power: pd.DataFrame
@@ -52,21 +51,45 @@ class Classifier:
     task_transforms: Dict[str, Any] = field(default_factory=dict)
     task_results: Dict[str, pd.DataFrame] = field(default_factory=dict)
 
-
-
     def run(self, task: str = "A"):
         """
-        Runs the module. 
+        Runs repeated cross-validation and ends up with the final tuned classifier, 
+        depending on the selected task(s):
+            - A: Responder vs Non-responder at timepoint T0
+            - B: Responder vs Non-responder at timepoint T2
+            - C: T0 vs T2 within the Responder group
+            - D: T0 vs T2 within the Non-responder group
+        
+        Parameters
+        ----------
+        :task: str, optional
+            Tells which task to run, default set at task A.
+
+        Returns
+        -------
+        None
+            Results, transformations, and trained models are stored in:
+          - `self.task_results` : dict[str, pd.DataFrame]
+              Mean and standard deviation of AUC per classifier.
+          - `self.task_transforms` : dict[str, dict]
+              Transformation and feature selection records for the best iteration.
+          - `self.task_models` : dict[str, Any]
+              Final trained classifier per task.        
         """
         task = task.lower()
         comparisons = []
 
         # Define comparisons depending on the task
-        if "a" in task: comparisons.append(("a", {"type": "time", "value": "t0"}))
-        if "b" in task: comparisons.append(("b", {"type": "time", "value": "t2"}))
-        if "c" in task: comparisons.append(("c",{"type": "group", "value": "Responder"}))
-        if "d" in task: comparisons.append(("d",{"type": "group", "value": "Non-responder"}))
-        if not comparisons: raise ValueError(f"Unknown task '{task}'. Use A, B, C, or D.")
+        if "a" in task:
+            comparisons.append(("a", {"type": "time", "value": "t0"}))
+        if "b" in task:
+            comparisons.append(("b", {"type": "time", "value": "t2"}))
+        if "c" in task:
+            comparisons.append(("c",{"type": "group", "value": "Responder"}))
+        if "d" in task:
+            comparisons.append(("d",{"type": "group", "value": "Non-responder"}))
+        if not comparisons:
+            raise ValueError(f"Unknown task '{task}'. Use A, B, C, or D.")
 
         for task_id, comp in comparisons:
             df_features = self._feature_matrix(self.df_power, self.df_plv)
@@ -104,12 +127,7 @@ class Classifier:
             summary = combined.groupby("Model").agg({"Mean AUC": ["mean", "std"]}).reset_index()
             summary.columns = ["Model", "Mean AUC (mean)", "Mean AUC (std)"]
             self.task_results[task_id] = summary.sort_values("Mean AUC (mean)", ascending=False)
-
-            print("\n=== Summary over all repetitions ===")
-            print(summary.sort_values("Mean AUC (mean)", ascending=False))
-
             best_model_name = self.task_results[task_id].iloc[0]["Model"]
-            print(f"Choosing classifier {best_model_name} as final classifier.")
 
             auc_df = pd.DataFrame(auc_tracking)
             best_iter_row = auc_df[auc_df["Model"] == best_model_name].sort_values("Mean AUC", ascending=False).iloc[0]
@@ -131,20 +149,38 @@ class Classifier:
 
             x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.20, stratify=y)
             x_train_sel, x_test_sel = self._apply_transformations_from_record(best_transform_record, x_train, x_test)
-            
-            self.task_models[task_id] = self._classifier_final(x_train_sel, x_test_sel, y_train, y_test, best_model_name)
 
-    def classify_new_data(self, df_power_new: pd.DataFrame, df_plv_new: pd.DataFrame, task: str = "A"):
+            self.task_models[task_id] = self._classifier_final(x_train_sel, x_test_sel, y_train, y_test,best_model_name)
+
+    def classify_new_data(self, df_power_new: pd.DataFrame, df_plv_new: pd.DataFrame, task: str = "A")-> None:
         """
-        Applies the best classifier and transformations to new recovered data.
+        Applies the best classifier and transformations to new unseen data.
+
+        Parameters
+        ----------
+        :df_power_new: pd.DataFrame
+            DataFrame containing the new power features for each patient.
+        :df_plv_new: pd.DataFrame
+            DataFrame containing the new PLV features for each patient.
+        :task: str, optional
+            Task identifier. 
+
+        Returns
+        -------
+        None
+            Classification metrics and predicitions are printed to the console.
         """
         task = task.lower()
         comparisons = []
 
-        if "a" in task: comparisons.append(("a", {"type": "time", "value": "t0"}))
-        if "b" in task: comparisons.append(("b", {"type": "time", "value": "t2"}))
-        if "c" in task: comparisons.append(("c", {"type": "group", "value": "Responder"}))
-        if "d" in task: comparisons.append(("d", {"type": "group", "value": "Non-responder"}))
+        if "a" in task:
+            comparisons.append(("a", {"type": "time", "value": "t0"}))
+        if "b" in task:
+            comparisons.append(("b", {"type": "time", "value": "t2"}))
+        if "c" in task:
+            comparisons.append(("c", {"type": "group", "value": "Responder"}))
+        if "d" in task:
+            comparisons.append(("d", {"type": "group", "value": "Non-responder"}))
         if not comparisons:
             raise ValueError(f"Unknown task '{task}'. Use A, B, C, or D.")
 
@@ -166,7 +202,7 @@ class Classifier:
 
             x_transformed, _ = self._apply_transformations_from_record(self.task_transforms[task_id], x, x)
             model = self.task_models[task_id]
-            
+
             y_pred = model.predict(x_transformed)
             if hasattr(model, "predict_proba"):
                 y_proba = model.predict_proba(x_transformed)[:, 1]
@@ -179,8 +215,8 @@ class Classifier:
             print(classification_report(y, y_pred, zero_division=0))
             print("Confusion matrix:\n", confusion_matrix(y, y_pred))
 
-
-    def _feature_matrix(self, df_power, df_plv):
+    def _feature_matrix(self, df_power: pd.DataFrame, df_plv: pd.DataFrame
+                        )-> pd.DataFrame:
         """
         Combines the feature dataframe to one dataframe useable for classification. 
 
@@ -189,16 +225,12 @@ class Classifier:
         :df_power: pd.DataFrame
             Dataframe with power values data.
         :df_plv: pd.DataFrame
-            Datafrane with plv values data. 
+            Dataframe with plv values data. 
 
         Returns
         -------
         :df_features: pd.DataFrame
             Contains a row per patient/time -- with all features as columns. 
-        :metadata: pd.DataFrame
-            Contains the patientID, timepoint and group of the cells.
-        :features: pd.DataFrame
-            Dataframe containing all features as columns and all patients as rows. 
         """
         cols_power = ["Patient", "Time", "Group", "FreqPairCSV", "Average_SNR", "Average_PWR", "Average_BASE"]
         cols_plv = ["Patient", "Time", "Group", "FreqPairCSV", "PLV"]
@@ -219,21 +251,37 @@ class Classifier:
 
         return df_features
 
-    def _feature_selection(self, df_features, target: str = "group"):
+    def _feature_selection(self, df_features: pd.DataFrame, target: str = "group"
+                           )-> Tuple[np.ndarray, np.ndarray, pd.Series, pd.Series, dict[str, Any]]:
         """
-        Prepares the dataframe for classification process.
+        Prepares the dataframe for classification process through:
+            - Train-test split
+            - Adaptive feature scaling
+            - Variance based feature removal
+            - Correlation-based feature removal
+            - Recursive Feature Elimination 
         
         Paramaters
         ----------
         :df_features: pd.DataFrame
             Contains a row per patient/time -- with all features as columns.
+        :target: str
+            Determines the classification target, default set on "group":
+            - "group": classify Responder vs Non-responder
+            - "time": classify t0 vs t2
 
         Returns
         -------
-        :X_train_scaled: 
-        :X_test_scaled: 
-        :y_train: 
-        :y_test: 
+        :X_train_scaled: np.ndarray
+            Training feature matrix after scaling and feature selection.
+        :X_test_scaled: np.ndarray
+            Test feature matrix after scaling and feature selection.
+        :y_train: pd.Series
+            Training target vector.
+        :y_test: pd.Series
+            Test target vector.
+        :t_record: dict[str, Any]
+            Dictionary containing all transformation object used.
         """
         x = df_features.drop(columns=["Patient", "Time", "Group"])
         if target == "group":
@@ -294,38 +342,29 @@ class Classifier:
         x_train_var = variance_selector.fit_transform(x_train_scaled)
         x_test_var = variance_selector.transform(x_test_scaled)
         selected_features = x_train_scaled.columns[variance_selector.get_support()]
-        print(f"Features reduced from {x_train.shape[1]} to {x_train_var.shape[1]} features after variation filtering")
-        
+
         # Correlation
         x_train_corr = pd.DataFrame(x_train_var, columns=selected_features)
         corr_matrix = x_train_corr.corr().abs()
         upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
         to_drop = [column for column in upper.columns if any(upper[column] > 0.95)]
         x_train_corr = x_train_corr.drop(columns=to_drop)
-        x_test_corr = pd.DataFrame(x_test_var, columns=selected_features).drop(columns=to_drop)
-        x_test_corr = x_test_corr[x_train_corr.columns]
-        print(f"Features reduced from {x_train_var.shape[1]} to {x_train_corr.shape[1]} features after correlation filtering")
+        x_test_corr = pd.DataFrame(x_test_var, columns=selected_features)
+        x_test_corr = x_test_corr.drop(columns=[c for c in to_drop if c in x_test_corr.columns])
+        x_test_corr = x_test_corr[x_train_corr.columns] # type: ignore
 
-        # Workaround with NaNs
+        # Workaround NaNs
         imputer = SimpleImputer(strategy="mean")
         x_train_corr = pd.DataFrame(imputer.fit_transform(x_train_corr), columns=x_train_corr.columns)
         x_test_corr = pd.DataFrame(imputer.transform(x_test_corr), columns=x_train_corr.columns)
-
-        # PCA
-        # pca = PCA(n_components=0.95)
-        # x_train_pca = pca.fit_transform(x_train_corr)
-        # x_test_pca = pca.transform(x_test_corr)
-        # print(f"Features reduced from {x_train_corr.shape[1]} to {x_train_pca.shape[1]} features after PCA filtering")
-        x_train_pca = x_train_corr
-        x_test_pca = x_test_corr
 
         # --- Feature selection (RFE) --- #
         estimator = LogisticRegression(max_iter = 500, class_weight = "balanced", solver='liblinear', penalty="l1")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=FitFailedWarning)
             rfecv = RFECV(estimator=estimator, step=1, cv=3, scoring='roc_auc', min_features_to_select=2)
-        x_train_sel = rfecv.fit_transform(x_train_pca, y_train)
-        x_test_sel = rfecv.transform(x_test_pca)
+        x_train_sel = rfecv.fit_transform(x_train_corr, y_train)
+        x_test_sel = rfecv.transform(x_test_corr)
         rfe_features = rfecv.get_support(indices=True)
         rfe_feature_names = x_train.columns[rfe_features]
         print("Optimal number of features:", rfecv.n_features_)
@@ -336,58 +375,73 @@ class Classifier:
             variance_selector=variance_selector,
             to_drop=to_drop,
             imputer=imputer,
-            #pca=pca,
             rfecv=rfecv,
             rfe_features=rfe_features,
-            final_columns_after_var_corr=x_train_corr.columns
-        )
+            final_columns_after_var_corr=x_train_corr.columns)
+
         return x_train_sel, x_test_sel, y_train, y_test, t_record
 
-    def _apply_transformations_from_record(self, t_record: Dict[str, Any], x_train, x_test):
+    def _apply_transformations_from_record(self, t_record: Dict[str, Any], x_train: pd.DataFrame, x_test: pd.DataFrame
+                                           )-> Tuple[np.ndarray, np.ndarray]:
         """
-        Applies final feature selection. 
+        Applies all transformation for final classification.
+
+        Parameters
+        ----------
+        :t_record: dict[str, Any]
+            Dictionary containing all transformation object used.
+        :X_train_scaled: np.ndarray
+            Training feature matrix after scaling and feature selection.
+        :X_test_scaled: np.ndarray
+            Test feature matrix after scaling and feature selection.
+        
+        Returns
+        -------
+        :x_train_sel: np.ndarray
+            Transformed training data.
+        :x_test_sel: np.ndarray
+            Transformed testing data. 
+        
         """
-        # SCALERS
+        # Scalers
         for col, scaler in t_record["scalers"].items():
             x_train.loc[:, col] = scaler.transform(x_train[[col]]).flatten()
             x_test.loc[:, col] = scaler.transform(x_test[[col]]).flatten()
 
-        # VARIANCE
+        # Variance
         x_train_var = t_record["variance_selector"].transform(x_train)
         x_test_var = t_record["variance_selector"].transform(x_test)
         selected_columns_var = x_train.columns[t_record["variance_selector"].get_support()]
 
-        # CORRELATION
+        # Correlation
         x_train_corr = pd.DataFrame(x_train_var, columns=selected_columns_var).drop(columns=t_record["to_drop"])
         x_test_corr = pd.DataFrame(x_test_var, columns=selected_columns_var).drop(columns=t_record["to_drop"])
-        x_test_corr = x_test_corr[x_train_corr.columns]
+        x_test_corr = x_test_corr[x_train_corr.columns] # type: ignore
 
-        # IMPUTER
+        # Imputer
         x_train_corr = pd.DataFrame(t_record["imputer"].transform(x_train_corr), columns=x_train_corr.columns)
         x_test_corr = pd.DataFrame(t_record["imputer"].transform(x_test_corr), columns=x_train_corr.columns)
-
-        # PCA
-        #x_train_pca = t_record["pca"].transform(x_train_corr)
-        #x_test_pca = t_record["pca"].transform(x_test_corr)
 
         # RFE
         x_train_sel = t_record["rfecv"].transform(x_train_corr)
         x_test_sel = t_record["rfecv"].transform(x_test_corr)
         return x_train_sel, x_test_sel
 
-    def _cross_val_classifiers(self, x_train_sel, y_train) -> Any:
+    def _cross_val_classifiers(self, x_train_sel: np.ndarray, y_train:np.ndarray) -> List[dict[str,Any]]:
         """
-        Performs a cross-validation for different classifiers, chooses final classifier.
+        Performs a cross-validation for multiple classifiers and returns final classifier.
 
         Paramaters
         ----------
-        :X_train_scaled: 
-        :y_train:
-            
+        :x_train_scaled: np.ndarray
+            Training features after scaling and feature selection.
+        :y_train: np.ndarray
+            Target labels corresponding to x_train_sel
 
         Returns
         -------
-        :cv_results: 
+        :cv_results: list of dict
+            List of dictionairies, each containing the classification model, mean AUC and stdf of AUC
         """
         clsfs = [LinearDiscriminantAnalysis(),QuadraticDiscriminantAnalysis(),KNeighborsClassifier(),GaussianNB(),
                     LogisticRegression(),SGDClassifier(),RandomForestClassifier(), svm.SVC()]
@@ -405,9 +459,28 @@ class Classifier:
 
         return cv_results
 
-    def _classifier_final(self, x_train_sel, x_test_sel, y_train, y_test, best_model_name) -> Any:
+    def _classifier_final(self, x_train_sel: np.ndarray, x_test_sel: np.ndarray, y_train: np.ndarray,
+                          y_test: np.ndarray, best_model_name: str) -> Any:
         """
-        Performs hyperparameter tuning and classification for the final classifier.
+        Tunes and evaluates the final classifier with optional hyperparameters.
+    
+        Parameters
+        ----------
+        :x_train_sel: np.ndarray
+            Training features after scaling and feature selection.
+        :x_test_sel: np.ndarray
+            Test features after scaling and feature selection.
+        :y_train: np.ndarray
+            Training labels.
+        :y_test: np.ndarray
+            Test labels.
+        :best_model_name: str
+            Name of the classifier to use for final fitting.
+
+        Returns
+        -------
+        :best_model: estimator
+            Fitted classifier (either with default or best hyperparameters).
         """
 
         # Hyperparameters per classifier

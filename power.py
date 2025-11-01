@@ -3,7 +3,8 @@ Module power calculates the power spectral densities of the different flash-stim
 calculates the SNR (flash-stimulation-harmonics vs baseline).
 """
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Optional
 import numpy as np
 import pandas as pd
 
@@ -19,6 +20,7 @@ class Power:
     """ Implements the full power calculation pipeline for EEG data. """
     passband: list
     raw: BaseRaw
+    eeg: Optional[BaseRaw] = field(default=None, init=False)
 
     def run(self):
         """
@@ -53,7 +55,7 @@ class Power:
         Returns
         -------
         :df: Pandas DataFrame
-            Dataframe containing EEG data information.
+            Dataframe containing EEG information.
         """
         sfreq = raw.info["sfreq"]
         block_threshold = 1.0 * sfreq
@@ -107,7 +109,7 @@ class Power:
         Returns
         -------
         :epochs: mne.Epochs
-            EEG data epoched around the different frequencies.
+            EEG epoched around the different frequencies.
         :df_epochs:
             Dataframe containing information about the epochs.
         """
@@ -152,7 +154,7 @@ class Power:
         return epochs, df_epochs
 
     @staticmethod
-    def _fft_power(epochs, df_epochs: pd.DataFrame, trim: float = 0.0, padding: str = "copy",
+    def _fft_power(epochs: mne.Epochs, df_epochs: pd.DataFrame, trim: float = 0.0, padding: str = "copy",
                     upper_lim: int = 40, plot: bool = False)-> tuple[dict, dict]:
         """
         Automatically compute FFT for all blocks.
@@ -287,7 +289,7 @@ class Power:
         return fft_powers, fft_freq
 
     @staticmethod
-    def _snr(epochs, fft_powers: dict, fft_freq: dict, save: bool = False, plot: bool = False,
+    def _snr(epochs: mne.Epochs, fft_powers: dict, fft_freq: dict, save: bool = False, plot: bool = False,
              harms: int = 4, upper_lim: int = 40, montage="standard_1020")-> pd.DataFrame:
         """
         Computes the SNR's for different frequencies. 
@@ -317,7 +319,7 @@ class Power:
         Returns
         -------
         :df_all: Pandas DataFrame
-            Dataframe containing the SNRs and baseline powers for different frequencies/harmonics compared to baseline.
+            Dataframe containing the power values for all frequency-pairs.
         """
 
         freqs = [f for f in fft_powers[1].keys() if f != 0]
